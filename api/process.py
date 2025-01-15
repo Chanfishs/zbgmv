@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import Response, HTMLResponse
+from fastapi.responses import Response, HTMLResponse, JSONResponse
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -187,7 +187,10 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
         # 验证文件扩展名
         if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
             print("文件格式错误：非 .xlsx 格式")
-            return {"error": "文件格式错误：请上传 .xlsx 格式的文件"}, 400
+            return JSONResponse(
+                status_code=400,
+                content={"error": "文件格式错误：请上传 .xlsx 格式的文件"}
+            )
 
         # 读取文件内容
         try:
@@ -200,12 +203,26 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
             print(f"排班表文件大小: {len(schedule_data)} bytes")
         except Exception as e:
             print(f"文件读取失败: {str(e)}")
-            return {"error": f"文件读取失败：{str(e)}"}, 400
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"文件读取失败：{str(e)}"}
+            )
+
+        # 验证文件大小
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+        if len(order_data) > MAX_FILE_SIZE or len(schedule_data) > MAX_FILE_SIZE:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "文件过大：请确保每个文件小于100MB"}
+            )
 
         # 验证文件是否为空
         if len(order_data) == 0 or len(schedule_data) == 0:
             print("文件内容为空")
-            return {"error": "文件内容为空"}, 400
+            return JSONResponse(
+                status_code=400,
+                content={"error": "文件内容为空"}
+            )
 
         # 尝试预览文件内容
         try:
@@ -218,7 +235,10 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
             print(f"排班表列名: {list(schedule_preview.columns)}")
         except Exception as e:
             print(f"文件预览失败: {str(e)}")
-            return {"error": f"文件格式错误：无法读取文件内容，请确保文件为有效的 Excel 文件。详细错误：{str(e)}"}, 400
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"文件格式错误：无法读取文件内容，请确保文件为有效的 Excel 文件。详细错误：{str(e)}"}
+            )
 
         # 处理数据
         try:
@@ -236,14 +256,26 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
             error_msg = str(e)
             print(f"数据处理失败: {error_msg}")
             if "KeyError" in error_msg:
-                return {"error": f"文件格式错误：缺少必要的列 {error_msg}"}, 400
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"文件格式错误：缺少必要的列 {error_msg}"}
+                )
             elif "ValueError" in error_msg:
-                return {"error": f"数据格式错误：{error_msg}"}, 400
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"数据格式错误：{error_msg}"}
+                )
             else:
-                return {"error": f"处理失败：{error_msg}"}, 500
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"处理失败：{error_msg}"}
+                )
     except Exception as e:
         print(f"系统错误: {str(e)}")
-        return {"error": f"系统错误：{str(e)}"}, 500
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"系统错误：{str(e)}"}
+        )
 
 def process_excel(order_data, schedule_data):
     """处理 Excel 数据的核心逻辑"""
@@ -297,7 +329,7 @@ def process_excel(order_data, schedule_data):
 
         print("过滤后 df_filtered 行数:", len(df_filtered))
         if df_filtered.empty:
-            print("警告：过滤后没有任何数据，请检查过滤条件是否过于严格。")
+            raise Exception("过滤后没有任何数据，请检查过滤条件是否过于严格或数据是否符合要求")
 
         # ========== 第 2 步：读取并验证排班表 ==========
         print("正在读取主播排班数据...")
@@ -349,15 +381,21 @@ def process_excel(order_data, schedule_data):
                 errors='coerce'
             ).dt.time
 
-        # 打印空值统计
-        print("df_filtered['订单提交日期'] 为空的数量:", df_filtered['订单提交日期'].isna().sum())
-        if '订单提交时间' in df_filtered.columns:
-            print("df_filtered['订单提交时间'] 为空的数量:", df_filtered['订单提交时间'].isna().sum())
-        print("df_schedule['日期'] 为空的数量:", df_schedule['日期'].isna().sum())
-        if '上播时间' in df_schedule.columns:
-            print("df_schedule['上播时间'] 为空的数量:", df_schedule['上播时间'].isna().sum())
-        if '下播时间' in df_schedule.columns:
-            print("df_schedule['下播时间'] 为空的数量:", df_schedule['下播时间'].isna().sum())
+        # 检查日期时间转换后的空值
+        date_time_errors = []
+        if df_filtered['订单提交日期'].isna().any():
+            date_time_errors.append("订单数据中存在无效的日期格式")
+        if df_filtered['订单提交时间'].isna().any():
+            date_time_errors.append("订单数据中存在无效的时间格式")
+        if df_schedule['日期'].isna().any():
+            date_time_errors.append("排班表中存在无效的日期格式")
+        if df_schedule['上播时间'].isna().any():
+            date_time_errors.append("排班表中存在无效的上播时间格式")
+        if df_schedule['下播时间'].isna().any():
+            date_time_errors.append("排班表中存在无效的下播时间格式")
+
+        if date_time_errors:
+            raise Exception("日期时间格式错误：" + "；".join(date_time_errors))
 
         # ========== 第 4 步：匹配并统计"订单应付金额" ==========
         df_schedule['GMV'] = np.nan
