@@ -1,6 +1,28 @@
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import Response
 import pandas as pd
 import numpy as np
 from io import BytesIO
+
+app = FastAPI()
+
+@app.post("/api/process")
+async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
+    try:
+        order_data = await order_file.read()
+        schedule_data = await schedule_file.read()
+        
+        result = process_excel(order_data, schedule_data)
+        
+        return Response(
+            content=result,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": "attachment; filename=processed_result.xlsx"
+            }
+        )
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 def process_excel(order_data, schedule_data):
     """处理 Excel 数据的核心逻辑"""
