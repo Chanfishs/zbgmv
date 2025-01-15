@@ -1,15 +1,24 @@
-from flask import Flask, request, jsonify, send_file, render_template_string
+from http.server import BaseHTTPRequestHandler
+import json
 import pandas as pd
 import numpy as np
 from io import BytesIO
 import base64
 import os
+import cgi
+import tempfile
 
-app = Flask(__name__)
-
-# 读取 HTML 模板
-with open(os.path.join(os.path.dirname(__file__), 'templates/index.html'), 'r', encoding='utf-8') as f:
-    HTML_TEMPLATE = f.read()
+def read_template():
+    try:
+        template_path = os.path.join(os.path.dirname(__file__), 'templates/index.html')
+        with open(template_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error reading template: {str(e)}")
+        return """
+        <!DOCTYPE html>
+        <html><body><h1>Error loading template</h1></body></html>
+        """
 
 def process_excel(order_data, schedule_data):
     try:
@@ -118,37 +127,81 @@ def process_excel(order_data, schedule_data):
     except Exception as e:
         raise Exception(f"数据处理失败: {str(e)}")
 
-@app.route('/', methods=['GET'])
-def index():
-    return render_template_string(HTML_TEMPLATE)
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            if self.path == '/':
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(read_template().encode('utf-8'))
+            elif self.path in ['/favicon.ico', '/favicon.png']:
+                self.send_response(204)
+                self.end_headers()
+            else:
+                self.send_response(404)
+                self.end_headers()
+        except Exception as e:
+            print(f"GET Error: {str(e)}")
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
 
-@app.route('/api/upload', methods=['POST'])
-def upload():
-    try:
-        if 'order_file' not in request.files or 'schedule_file' not in request.files:
-            return jsonify({'success': False, 'message': '请同时上传订单文件和排班表文件'}), 400
-            
-        order_file = request.files['order_file']
-        schedule_file = request.files['schedule_file']
-        
-        if order_file.filename == '' or schedule_file.filename == '':
-            return jsonify({'success': False, 'message': '请选择有效的文件'}), 400
+    def do_POST(self):
+        try:
+            if self.path == '/api/upload':
+                # 获取 Content-Type 和 boundary
+                content_type = self.headers.get('Content-Type', '')
+                if not content_type.startswith('multipart/form-data'):
+                    raise ValueError('Invalid content type')
 
-        # 处理数据
-        result = process_excel(order_file.read(), schedule_file.read())
-        
-        return jsonify({
-            'success': True,
-            'content': base64.b64encode(result).decode('utf-8')
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
+                # 创建临时文件来存储上传的数据
+                with tempfile.NamedTemporaryFile() as temp_file:
+                    # 读取请求体
+                    content_length = int(self.headers.get('Content-Length', 0))
+                    temp_file.write(self.rfile.read(content_length))
+                    temp_file.seek(0)
 
-# Vercel 需要的处理函数
-def handler(request):
-    with app.request_context(request):
-        return app.full_dispatch_request() 
+                    # 解析 multipart/form-data
+                    form = cgi.FieldStorage(
+                        fp=temp_file,
+                        headers=self.headers,
+                        environ={
+                            'REQUEST_METHOD': 'POST',
+                            'CONTENT_TYPE': content_type,
+                        }
+                    )
+
+                    # 检查文件是否存在
+                    if 'order_file' not in form or 'schedule_file' not in form:
+                        raise ValueError('Missing required files')
+
+                    # 读取文件内容
+                    order_file = form['order_file']
+                    schedule_file = form['schedule_file']
+                    
+                    # 处理数据
+                    result = process_excel(order_file.file.read(), schedule_file.file.read())
+
+                    # 返回结果
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    response = {
+                        'success': True,
+                        'content': base64.b64encode(result).decode('utf-8')
+                    }
+                    self.wfile.write(json.dumps(response).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        except Exception as e:
+            print(f"POST Error: {str(e)}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': False,
+                'message': str(e)
+            }).encode()) 
