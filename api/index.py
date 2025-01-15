@@ -5,23 +5,14 @@ import numpy as np
 import os
 from datetime import datetime
 import uuid
-from tempfile import NamedTemporaryFile, mkdtemp
-import shutil
+from io import BytesIO
+import base64
 
 app = Flask(__name__, template_folder='templates')
 
 # 配置
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.config['ALLOWED_EXTENSIONS'] = {'xls', 'xlsx'}
-
-def get_temp_dir():
-    """获取临时目录"""
-    temp_dir = mkdtemp()
-    uploads = os.path.join(temp_dir, 'uploads')
-    results = os.path.join(temp_dir, 'results')
-    os.makedirs(uploads, exist_ok=True)
-    os.makedirs(results, exist_ok=True)
-    return temp_dir, uploads, results
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -45,36 +36,26 @@ def upload_files():
         if not all(allowed_file(f.filename) for f in [order_file, schedule_file]):
             return jsonify({'success': False, 'message': '不支持的文件类型'}), 400
 
-        # 创建临时目录
-        temp_dir, uploads_dir, results_dir = get_temp_dir()
-        try:
-            # 保存上传文件
-            order_path = os.path.join(uploads_dir, secure_filename(order_file.filename))
-            schedule_path = os.path.join(uploads_dir, secure_filename(schedule_file.filename))
-            
-            order_file.save(order_path)
-            schedule_file.save(schedule_path)
-            
-            # 处理数据
-            result_filename = f"result_{uuid.uuid4()}.xlsx"
-            result_path = os.path.join(results_dir, result_filename)
-            
-            process_data(order_path, schedule_path, result_path)
-            
-            # 读取结果文件内容
-            with open(result_path, 'rb') as f:
-                result_content = f.read()
+        # 读取文件内容到内存
+        order_content = BytesIO(order_file.read())
+        schedule_content = BytesIO(schedule_file.read())
+        
+        # 处理数据
+        result_filename = f"result_{uuid.uuid4()}.xlsx"
+        result_content = BytesIO()
+        
+        process_data(order_content, schedule_content, result_content)
+        
+        # 将结果转换为base64
+        result_content.seek(0)
+        result_base64 = base64.b64encode(result_content.read()).decode('utf-8')
                 
-            return jsonify({
-                'success': True,
-                'message': '处理成功',
-                'result_file': result_filename,
-                'content': result_content.decode('utf-8')
-            })
-            
-        finally:
-            # 清理临时目录
-            shutil.rmtree(temp_dir)
+        return jsonify({
+            'success': True,
+            'message': '处理成功',
+            'result_file': result_filename,
+            'content': result_base64
+        })
         
     except Exception as e:
         return jsonify({
@@ -85,23 +66,15 @@ def upload_files():
 @app.route('/api/download/<filename>')
 def download_file(filename):
     try:
-        # 创建临时目录
-        temp_dir = mkdtemp()
-        file_path = os.path.join(temp_dir, filename)
+        # 从base64还原文件内容
+        content = base64.b64decode(request.args.get('content', ''))
         
-        # 从请求中获取文件内容并保存
-        content = request.args.get('content', '').encode('utf-8')
-        with open(file_path, 'wb') as f:
-            f.write(content)
-        
-        try:
-            return send_file(
-                file_path,
-                as_attachment=True,
-                download_name=f"统计结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            )
-        finally:
-            shutil.rmtree(temp_dir)
+        return send_file(
+            BytesIO(content),
+            as_attachment=True,
+            download_name=f"统计结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
             
     except Exception as e:
         return jsonify({
@@ -109,10 +82,10 @@ def download_file(filename):
             'message': '文件下载失败'
         }), 404
 
-def process_data(order_file_path: str, schedule_file_path: str, output_file_path: str) -> None:
+def process_data(order_content: BytesIO, schedule_content: BytesIO, output_content: BytesIO) -> None:
     try:
         # 1. 读取订单数据
-        df = pd.read_excel(order_file_path)
+        df = pd.read_excel(order_content)
         
         # 转为字符串以防后续合并或过滤问题
         df[['主订单编号', '子订单编号', '商品ID']] = df[['主订单编号', '子订单编号', '商品ID']].astype(str)
@@ -140,7 +113,7 @@ def process_data(order_file_path: str, schedule_file_path: str, output_file_path
         df_filtered = df_filtered[df_filtered['取消原因'].isna()]
         
         # 2. 读取排班表
-        df_schedule = pd.read_excel(schedule_file_path)
+        df_schedule = pd.read_excel(schedule_content)
         
         # 3. 统一转换日期/时间类型
         time_cols = ['订单提交时间']
@@ -240,7 +213,7 @@ def process_data(order_file_path: str, schedule_file_path: str, output_file_path
             df_ck_sum = pd.DataFrame()
 
         # 7. 写入结果文件
-        with pd.ExcelWriter(output_file_path, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output_content, engine='openpyxl') as writer:
             df_filtered.to_excel(writer, sheet_name='主播、场控业绩筛选源表', index=False)
             df_schedule.to_excel(writer, sheet_name='主播、场控排班', index=False)
             if not df_anchor_sum.empty:

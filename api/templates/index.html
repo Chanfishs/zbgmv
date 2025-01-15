@@ -187,7 +187,7 @@
                         progressBar.style.width = '100%';
                         progressText.textContent = '处理完成！';
                         resultArea.style.display = 'block';
-                        downloadLink.href = window.location.origin + `/api/download/${result.result_file}?content=${encodeURIComponent(result.content)}`;
+                        downloadLink.href = window.location.origin + `/api/download/${result.result_file}?content=${result.content}`;
                     } else {
                         throw new Error(result.message || '处理失败');
                     }
