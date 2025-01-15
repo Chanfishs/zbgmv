@@ -1,19 +1,106 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import Response, HTMLResponse
-from fastapi.templating import Jinja2Templates
 import pandas as pd
 import numpy as np
 from io import BytesIO
-from pathlib import Path
 
 app = FastAPI()
 
-# 设置模板目录
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-
 @app.get("/", response_class=HTMLResponse)
-async def root(request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def root():
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="zh">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Excel 数据处理 API</title>
+        <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    </head>
+    <body class="bg-gray-100">
+        <div class="container mx-auto px-4 py-8">
+            <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
+                <h1 class="text-3xl font-bold text-center mb-8">Excel 数据处理 API</h1>
+                
+                <div class="mb-8">
+                    <h2 class="text-xl font-semibold mb-4">文件上传</h2>
+                    <form id="uploadForm" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">订单数据文件</label>
+                            <input type="file" name="order_file" accept=".xlsx" required
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">排班表文件</label>
+                            <input type="file" name="schedule_file" accept=".xlsx" required
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        </div>
+                        <button type="submit"
+                                class="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            处理数据
+                        </button>
+                    </form>
+                </div>
+
+                <div class="space-y-4">
+                    <h2 class="text-xl font-semibold">使用说明</h2>
+                    <div class="prose">
+                        <h3 class="text-lg font-medium">Excel 文件格式要求：</h3>
+                        <ul class="list-disc pl-5 space-y-2">
+                            <li>订单数据表必须包含：主订单编号、子订单编号、商品ID等字段</li>
+                            <li>排班表必须包含：日期、上播时间、下播时间等字段</li>
+                        </ul>
+
+                        <h3 class="text-lg font-medium mt-4">数据处理规则：</h3>
+                        <ul class="list-disc pl-5 space-y-2">
+                            <li>自动过滤特定关键词的商品</li>
+                            <li>自动匹配时间段内的订单</li>
+                            <li>计算 GMV、退货 GMV 和 GSV</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const formData = new FormData();
+                const orderFile = document.querySelector('input[name="order_file"]').files[0];
+                const scheduleFile = document.querySelector('input[name="schedule_file"]').files[0];
+                
+                formData.append('order_file', orderFile);
+                formData.append('schedule_file', scheduleFile);
+                
+                try {
+                    const response = await fetch('/api/process', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = '处理结果.xlsx';
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+                        a.remove();
+                    } else {
+                        alert('处理失败，请检查文件格式是否正确');
+                    }
+                } catch (error) {
+                    alert('上传失败：' + error.message);
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 @app.post("/api/process")
 async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
