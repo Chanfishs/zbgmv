@@ -1,184 +1,49 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.responses import Response, HTMLResponse, JSONResponse
 import pandas as pd
 import numpy as np
 from io import BytesIO
+import asyncio
+from typing import Dict
+import uuid
+import time
 
 app = FastAPI()
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="zh">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Excel 数据处理 API</title>
-        <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-        <style>
-            .error-message {
-                display: none;
-                margin-top: 1rem;
-                padding: 1rem;
-                border-radius: 0.375rem;
-                background-color: #FEE2E2;
-                border: 1px solid #F87171;
-                color: #B91C1C;
-            }
-            .loading {
-                display: none;
-                margin-top: 1rem;
-                text-align: center;
-                color: #3B82F6;
-            }
-        </style>
-    </head>
-    <body class="bg-gray-100">
-        <div class="container mx-auto px-4 py-8">
-            <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
-                <h1 class="text-3xl font-bold text-center mb-8">Excel 数据处理 API</h1>
-                
-                <div class="mb-8">
-                    <h2 class="text-xl font-semibold mb-4">文件上传</h2>
-                    <form id="uploadForm" class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">订单数据文件</label>
-                            <input type="file" name="order_file" accept=".xlsx" required
-                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
-                                   onchange="validateFile(this)">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700">排班表文件</label>
-                            <input type="file" name="schedule_file" accept=".xlsx" required
-                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
-                                   onchange="validateFile(this)">
-                        </div>
-                        <button type="submit" id="submitBtn"
-                                class="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            处理数据
-                        </button>
-                    </form>
-                    <div id="errorMessage" class="error-message"></div>
-                    <div id="loading" class="loading">
-                        <svg class="animate-spin h-5 w-5 mr-3 inline-block" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        正在处理数据，请稍候...
-                    </div>
-                </div>
+# 存储任务状态
+task_status: Dict[str, dict] = {}
 
-                <div class="space-y-4">
-                    <h2 class="text-xl font-semibold">使用说明</h2>
-                    <div class="prose">
-                        <h3 class="text-lg font-medium">Excel 文件格式要求：</h3>
-                        <ul class="list-disc pl-5 space-y-2">
-                            <li>订单数据表必须包含：主订单编号、子订单编号、商品ID等字段</li>
-                            <li>排班表必须包含：日期、上播时间、下播时间等字段</li>
-                        </ul>
-
-                        <h3 class="text-lg font-medium mt-4">数据处理规则：</h3>
-                        <ul class="list-disc pl-5 space-y-2">
-                            <li>自动过滤特定关键词的商品</li>
-                            <li>自动匹配时间段内的订单</li>
-                            <li>计算 GMV、退货 GMV 和 GSV</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <script>
-            const form = document.getElementById('uploadForm');
-            const submitBtn = document.getElementById('submitBtn');
-            const errorMessage = document.getElementById('errorMessage');
-            const loading = document.getElementById('loading');
-
-            function validateFile(input) {
-                const file = input.files[0];
-                if (file) {
-                    if (!file.name.endsWith('.xlsx')) {
-                        errorMessage.textContent = '请上传 .xlsx 格式的文件';
-                        errorMessage.style.display = 'block';
-                        input.value = '';
-                        return false;
-                    }
-                    if (file.size > 10 * 1024 * 1024) {  // 10MB
-                        errorMessage.textContent = '文件大小不能超过 10MB';
-                        errorMessage.style.display = 'block';
-                        input.value = '';
-                        return false;
-                    }
-                    errorMessage.style.display = 'none';
-                    return true;
-                }
-                return false;
-            }
-
-            form.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                
-                // 重置状态
-                errorMessage.style.display = 'none';
-                errorMessage.textContent = '';
-                loading.style.display = 'block';
-                submitBtn.disabled = true;
-                
-                const formData = new FormData();
-                const orderFile = document.querySelector('input[name="order_file"]').files[0];
-                const scheduleFile = document.querySelector('input[name="schedule_file"]').files[0];
-                
-                if (!orderFile || !scheduleFile) {
-                    errorMessage.textContent = '请选择所有必需的文件';
-                    errorMessage.style.display = 'block';
-                    loading.style.display = 'none';
-                    submitBtn.disabled = false;
-                    return;
-                }
-                
-                formData.append('order_file', orderFile);
-                formData.append('schedule_file', scheduleFile);
-                
-                try {
-                    const response = await fetch('/api/process', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const contentType = response.headers.get('content-type');
-                    
-                    if (response.ok && contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-                        const blob = await response.blob();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = '处理结果.xlsx';
-                        document.body.appendChild(a);
-                        a.click();
-                        window.URL.revokeObjectURL(url);
-                        a.remove();
-                    } else {
-                        const data = await response.json();
-                        errorMessage.textContent = data.error || '处理失败，请检查文件格式是否正确';
-                        errorMessage.style.display = 'block';
-                    }
-                } catch (error) {
-                    errorMessage.textContent = '上传失败：' + error.message;
-                    errorMessage.style.display = 'block';
-                } finally {
-                    loading.style.display = 'none';
-                    submitBtn.disabled = false;
-                }
-            });
-        </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
+    """后台处理数据的异步函数"""
+    try:
+        # 更新任务状态
+        task_status[task_id].update({
+            "status": "processing",
+            "progress": 10,
+            "message": "正在读取数据..."
+        })
+        
+        # 处理数据
+        result = await process_excel_async(order_data, schedule_data, task_id)
+        
+        # 更新任务状态为完成
+        task_status[task_id].update({
+            "status": "completed",
+            "progress": 100,
+            "message": "处理完成",
+            "result": result
+        })
+    except Exception as e:
+        error_message = str(e)
+        print(f"处理失败: {error_message}")
+        # 更新任务状态为失败
+        task_status[task_id].update({
+            "status": "failed",
+            "message": error_message
+        })
 
 @app.post("/api/process")
-async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
+async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     try:
         print(f"开始处理文件上传...")
         print(f"订单文件名: {order_file.filename}")
@@ -216,60 +81,27 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
                 content={"error": "文件过大：请确保每个文件小于100MB"}
             )
 
-        # 验证文件是否为空
-        if len(order_data) == 0 or len(schedule_data) == 0:
-            print("文件内容为空")
-            return JSONResponse(
-                status_code=400,
-                content={"error": "文件内容为空"}
-            )
+        # 创建任务ID并初始化状态
+        task_id = str(uuid.uuid4())
+        task_status[task_id] = {
+            "status": "pending",
+            "progress": 0,
+            "message": "正在准备处理...",
+            "start_time": time.time()
+        }
 
-        # 尝试预览文件内容
-        try:
-            print("尝试预览订单文件内容...")
-            df_preview = pd.read_excel(BytesIO(order_data), nrows=1)
-            print(f"订单文件列名: {list(df_preview.columns)}")
-            
-            print("尝试预览排班表内容...")
-            schedule_preview = pd.read_excel(BytesIO(schedule_data), nrows=1)
-            print(f"排班表列名: {list(schedule_preview.columns)}")
-        except Exception as e:
-            print(f"文件预览失败: {str(e)}")
-            return JSONResponse(
-                status_code=400,
-                content={"error": f"文件格式错误：无法读取文件内容，请确保文件为有效的 Excel 文件。详细错误：{str(e)}"}
-            )
+        # 启动后台任务
+        background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
 
-        # 处理数据
-        try:
-            print("开始处理数据...")
-            result = process_excel(order_data, schedule_data)
-            print("数据处理完成，准备返回结果")
-            return Response(
-                content=result,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={
-                    "Content-Disposition": "attachment; filename=processed_result.xlsx"
-                }
-            )
-        except Exception as e:
-            error_msg = str(e)
-            print(f"数据处理失败: {error_msg}")
-            if "KeyError" in error_msg:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": f"文件格式错误：缺少必要的列 {error_msg}"}
-                )
-            elif "ValueError" in error_msg:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": f"数据格式错误：{error_msg}"}
-                )
-            else:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": f"处理失败：{error_msg}"}
-                )
+        # 返回任务ID
+        return JSONResponse(
+            status_code=202,  # 使用 202 Accepted 状态码表示请求已接受但处理尚未完成
+            content={
+                "task_id": task_id,
+                "message": "文件已接收，正在处理中"
+            }
+        )
+
     except Exception as e:
         print(f"系统错误: {str(e)}")
         return JSONResponse(
@@ -277,9 +109,67 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
             content={"error": f"系统错误：{str(e)}"}
         )
 
-def process_excel(order_data, schedule_data):
-    """处理 Excel 数据的核心逻辑"""
+@app.get("/api/status/{task_id}")
+async def get_task_status(task_id: str):
+    """获取任务处理状态"""
     try:
+        if task_id not in task_status:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "任务不存在"}
+            )
+        
+        task = task_status[task_id]
+        
+        # 如果任务已完成并且有结果
+        if task["status"] == "completed" and "result" in task:
+            # 获取结果并从状态中移除
+            result = task.pop("result", None)
+            if result:
+                # 返回 Excel 文件
+                return Response(
+                    content=result,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={
+                        "Content-Disposition": "attachment; filename=processed_result.xlsx"
+                    }
+                )
+        
+        # 如果任务失败
+        if task["status"] == "failed":
+            error_message = task.get("message", "未知错误")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "failed",
+                    "error": error_message
+                }
+            )
+        
+        # 返回当前状态
+        return JSONResponse(
+            content={
+                "status": task["status"],
+                "progress": task["progress"],
+                "message": task["message"]
+            }
+        )
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"获取任务状态失败：{str(e)}"}
+        )
+
+async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: str):
+    """异步处理 Excel 数据的核心逻辑"""
+    try:
+        # 更新状态：开始处理
+        task_status[task_id].update({
+            "progress": 20,
+            "message": "正在验证数据格式..."
+        })
+
         # 验证必要的列是否存在
         required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
                                 '流量体裁', '取消原因', '订单状态', '订单应付金额', 
@@ -287,99 +177,101 @@ def process_excel(order_data, schedule_data):
         required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
 
         # ========== 第 1 步：读取并验证原始数据 ==========
-        print("正在读取原始订单数据...")
-        try:
-            df = pd.read_excel(BytesIO(order_data))
-        except Exception as e:
-            raise Exception(f"订单数据文件读取失败：{str(e)}")
+        task_status[task_id].update({
+            "progress": 30,
+            "message": "正在读取订单数据..."
+        })
 
+        df = pd.read_excel(BytesIO(order_data))
+        
         # 验证订单数据列
         missing_columns = [col for col in required_order_columns if col not in df.columns]
         if missing_columns:
             raise Exception(f"订单数据缺少必要的列：{', '.join(missing_columns)}")
 
-        # 转为字符串以防后续合并或过滤问题
-        try:
-            df[['主订单编号', '子订单编号', '商品ID']] = df[['主订单编号', '子订单编号', '商品ID']].astype(str)
-        except Exception as e:
-            raise Exception(f"订单编号或商品ID格式转换失败：{str(e)}")
+        task_status[task_id].update({
+            "progress": 40,
+            "message": "正在处理订单数据..."
+        })
 
-        # 删除"选购商品"列中含有特定关键词的行
-        keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
+        # 使用 chunk 处理大数据
+        chunk_size = 10000
+        total_chunks = len(df) // chunk_size + 1
+        df_filtered_list = []
+        
+        for i in range(total_chunks):
+            start_idx = i * chunk_size
+            end_idx = min((i + 1) * chunk_size, len(df))
+            chunk = df.iloc[start_idx:end_idx].copy()
+            
+            # 转为字符串以防后续合并或过滤问题
+            chunk[['主订单编号', '子订单编号', '商品ID']] = chunk[['主订单编号', '子订单编号', '商品ID']].astype(str)
+            
+            # 应用过滤条件
+            keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
+            chunk_filtered = chunk[~chunk['选购商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
+            chunk_filtered = chunk_filtered[~chunk_filtered['流量来源'].str.contains('精选联盟', na=False)]
+            
+            # 根据"流量体裁"筛选
+            mask_1 = (chunk_filtered['流量体裁'] == '其他') & (chunk_filtered['订单应付金额'] != 0)
+            mask_2 = chunk_filtered['流量体裁'] == '直播'
+            mask_3 = chunk_filtered['流量体裁'] == '数据将于第二天更新'
+            chunk_filtered = chunk_filtered[mask_1 | mask_2 | mask_3]
+            
+            # 筛选"取消原因"列为空
+            chunk_filtered = chunk_filtered[chunk_filtered['取消原因'].isna()]
+            
+            df_filtered_list.append(chunk_filtered)
+            
+            # 更新进度
+            progress = 40 + (i + 1) * 20 // total_chunks
+            task_status[task_id].update({
+                "progress": progress,
+                "message": f"正在处理订单数据... ({i + 1}/{total_chunks})"
+            })
+            
+            # 让出控制权，避免阻塞
+            await asyncio.sleep(0)
 
-        def contains_keywords(text):
-            for kw in keywords:
-                if kw in str(text):
-                    return True
-            return False
-
-        df_filtered = df[~df['选购商品'].apply(contains_keywords)]
-
-        # 删除"流量来源"列中含有"精选联盟"的行
-        df_filtered = df_filtered[~df_filtered['流量来源'].str.contains('精选联盟', na=False)]
-
-        # 根据"流量体裁"筛选
-        df_filtered_1 = df_filtered[(df_filtered['流量体裁'] == '其他') & (df_filtered['订单应付金额'] != 0)]
-        df_filtered_2 = df_filtered[df_filtered['流量体裁'] == '直播']
-        df_filtered_3 = df_filtered[df_filtered['流量体裁'] == '数据将于第二天更新']
-        df_filtered = pd.concat([df_filtered_1, df_filtered_2, df_filtered_3], ignore_index=True)
-
-        # 筛选"取消原因"列为空
-        df_filtered = df_filtered[df_filtered['取消原因'].isna()]
-
-        print("过滤后 df_filtered 行数:", len(df_filtered))
+        df_filtered = pd.concat(df_filtered_list, ignore_index=True)
+        
         if df_filtered.empty:
             raise Exception("过滤后没有任何数据，请检查过滤条件是否过于严格或数据是否符合要求")
 
-        # ========== 第 2 步：读取并验证排班表 ==========
-        print("正在读取主播排班数据...")
-        try:
-            df_schedule = pd.read_excel(BytesIO(schedule_data))
-        except Exception as e:
-            raise Exception(f"排班表文件读取失败：{str(e)}")
+        task_status[task_id].update({
+            "progress": 60,
+            "message": "正在处理排班表..."
+        })
 
+        # ========== 第 2 步：读取并验证排班表 ==========
+        df_schedule = pd.read_excel(BytesIO(schedule_data))
+        
         # 验证排班表列
         missing_columns = [col for col in required_schedule_columns if col not in df_schedule.columns]
         if missing_columns:
             raise Exception(f"排班表缺少必要的列：{', '.join(missing_columns)}")
 
+        task_status[task_id].update({
+            "progress": 70,
+            "message": "正在处理日期时间数据..."
+        })
+
         # ========== 第 3 步：统一转换日期/时间类型 ==========
-        # 先尝试把这几列都转为字符串并 strip 空格，以排除 Excel 中出现的隐藏字符
-        time_cols = ['订单提交时间']
-        for col in time_cols:
-            if col in df_filtered.columns:
-                df_filtered[col] = df_filtered[col].astype(str).str.strip()
-
-        # 对主播排班表的上播/下播时间做同样处理
-        schedule_time_cols = ['上播时间', '下播时间']
-        for col in schedule_time_cols:
-            if col in df_schedule.columns:
-                df_schedule[col] = df_schedule[col].astype(str).str.strip()
-
-        # 让 pandas 自动解析日期/时间格式
+        # 处理日期时间转换
         df_filtered['订单提交日期'] = pd.to_datetime(df_filtered['订单提交日期'], errors='coerce').dt.date
         df_schedule['日期'] = pd.to_datetime(df_schedule['日期'], errors='coerce').dt.date
-
-        if '订单提交时间' in df_filtered.columns:
-            df_filtered['订单提交时间'] = pd.to_datetime(
-                df_filtered['订单提交时间'],
-                format='%H:%M:%S',
-                errors='coerce'
-            ).dt.time
-
-        if '上播时间' in df_schedule.columns:
-            df_schedule['上播时间'] = pd.to_datetime(
-                df_schedule['上播时间'],
-                format='%H:%M:%S',
-                errors='coerce'
-            ).dt.time
-
-        if '下播时间' in df_schedule.columns:
-            df_schedule['下播时间'] = pd.to_datetime(
-                df_schedule['下播时间'],
-                format='%H:%M:%S',
-                errors='coerce'
-            ).dt.time
+        
+        for df, time_cols in [
+            (df_filtered, ['订单提交时间']),
+            (df_schedule, ['上播时间', '下播时间'])
+        ]:
+            for col in time_cols:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(
+                        df[col].astype(str).str.strip(),
+                        format='%H:%M:%S',
+                        errors='coerce'
+                    ).dt.time
 
         # 检查日期时间转换后的空值
         date_time_errors = []
@@ -397,77 +289,76 @@ def process_excel(order_data, schedule_data):
         if date_time_errors:
             raise Exception("日期时间格式错误：" + "；".join(date_time_errors))
 
+        task_status[task_id].update({
+            "progress": 80,
+            "message": "正在计算统计数据..."
+        })
+
         # ========== 第 4 步：匹配并统计"订单应付金额" ==========
-        df_schedule['GMV'] = np.nan
-        df_schedule['退货GMV'] = np.nan
-        df_schedule['GSV'] = np.nan
+        df_schedule['GMV'] = 0.0
+        df_schedule['退货GMV'] = 0.0
+        df_schedule['GSV'] = 0.0
 
-        print("开始根据日期、时间匹配订单数据...")
-        for i, row in df_schedule.iterrows():
-            date_schedule = row['日期']
-            start_time = row['上播时间']
-            end_time = row['下播时间']
-
-            if pd.isna(date_schedule) or pd.isna(start_time) or pd.isna(end_time):
+        # 按日期分组处理，减少内存使用
+        for date in df_schedule['日期'].unique():
+            schedule_mask = df_schedule['日期'] == date
+            order_mask = df_filtered['订单提交日期'] == date
+            
+            schedule_day = df_schedule[schedule_mask]
+            orders_day = df_filtered[order_mask]
+            
+            if orders_day.empty:
                 continue
+                
+            for i, row in schedule_day.iterrows():
+                start_time = row['上播时间']
+                end_time = row['下播时间']
+                
+                if pd.isna(start_time) or pd.isna(end_time):
+                    continue
+                
+                mask_time = (
+                    (orders_day['订单提交时间'] >= start_time) &
+                    (orders_day['订单提交时间'] <= end_time)
+                )
+                
+                # GMV
+                mask_status_GMV = orders_day['订单状态'].isin(['已发货', '已完成', '已关闭', '待发货'])
+                matched_df_GMV = orders_day[mask_time & mask_status_GMV]
+                df_schedule.at[i, 'GMV'] = matched_df_GMV['订单应付金额'].sum()
+                
+                # 退货GMV
+                mask_status_refund = (orders_day['订单状态'] == '已关闭')
+                matched_df_refund = orders_day[mask_time & mask_status_refund]
+                df_schedule.at[i, '退货GMV'] = matched_df_refund['订单应付金额'].sum()
+                
+                # GSV
+                mask_status_GSV = orders_day['订单状态'].isin(['已发货', '已完成', '待发货'])
+                matched_df_GSV = orders_day[mask_time & mask_status_GSV]
+                df_schedule.at[i, 'GSV'] = matched_df_GSV['订单应付金额'].sum()
+            
+            # 让出控制权
+            await asyncio.sleep(0)
 
-            mask_date = (df_filtered['订单提交日期'] == date_schedule)
-            mask_time = (
-                (df_filtered['订单提交时间'] >= start_time) &
-                (df_filtered['订单提交时间'] <= end_time)
-            )
+        task_status[task_id].update({
+            "progress": 90,
+            "message": "正在生成汇总报表..."
+        })
 
-            # （A）计算 GMV
-            mask_status_GMV = df_filtered['订单状态'].isin(['已发货', '已完成', '已关闭', '待发货'])
-            matched_df_GMV = df_filtered[mask_date & mask_time & mask_status_GMV]
-            sum_GMV = matched_df_GMV['订单应付金额'].sum()
-            df_schedule.at[i, 'GMV'] = sum_GMV
-
-            # （B）计算退货GMV
-            mask_status_refund = (df_filtered['订单状态'] == '已关闭')
-            matched_df_refund = df_filtered[mask_date & mask_time & mask_status_refund]
-            sum_refund = matched_df_refund['订单应付金额'].sum()
-            df_schedule.at[i, '退货GMV'] = sum_refund
-
-            # （C）计算 GSV
-            mask_status_GSV = df_filtered['订单状态'].isin(['已发货', '已完成', '待发货'])
-            matched_df_GSV = df_filtered[mask_date & mask_time & mask_status_GSV]
-            sum_GSV = matched_df_GSV['订单应付金额'].sum()
-            df_schedule.at[i, 'GSV'] = sum_GSV
-
-        # ========== 第 5 步：按「主播姓名」汇总 ==========
-        group_col_anchor = '主播姓名'
+        # ========== 第 5-6 步：汇总统计 ==========
         cols_to_sum = ['GMV', '退货GMV', 'GSV', '时段消耗']
-
-        # 检查列是否存在
-        for col_check in [group_col_anchor, '时段消耗']:
-            if col_check not in df_schedule.columns:
-                print(f"警告：排班表中未找到列：{col_check}，请检查列名。")
-
-        if all(c in df_schedule.columns for c in [group_col_anchor, '时段消耗']):
-            df_anchor_sum = df_schedule.groupby(group_col_anchor, as_index=False)[cols_to_sum].sum()
-            df_anchor_sum.rename(columns={
-                'GMV': '主播GMV总和',
-                '退货GMV': '主播退货GMV总和',
-                'GSV': '主播GSV总和',
-                '时段消耗': '总消耗'
-            }, inplace=True)
+        
+        # 主播汇总
+        if '主播姓名' in df_schedule.columns:
+            df_anchor_sum = df_schedule.groupby('主播姓名', as_index=False)[cols_to_sum].sum()
+            df_anchor_sum.columns = ['主播姓名', '主播GMV总和', '主播退货GMV总和', '主播GSV总和', '总消耗']
         else:
             df_anchor_sum = pd.DataFrame()
-
-        # ========== 第 6 步：按「场控姓名」汇总 ==========
-        group_col_ck = '场控姓名'
-        if group_col_ck not in df_schedule.columns:
-            print(f"警告：排班表中未找到列：{group_col_ck}，请检查列名。")
-
-        if all(c in df_schedule.columns for c in [group_col_ck, '时段消耗']):
-            df_ck_sum = df_schedule.groupby(group_col_ck, as_index=False)[cols_to_sum].sum()
-            df_ck_sum.rename(columns={
-                'GMV': '场控GMV总和',
-                '退货GMV': '场控退货GMV总和',
-                'GSV': '场控GSV总和',
-                '时段消耗': '总消耗'
-            }, inplace=True)
+            
+        # 场控汇总
+        if '场控姓名' in df_schedule.columns:
+            df_ck_sum = df_schedule.groupby('场控姓名', as_index=False)[cols_to_sum].sum()
+            df_ck_sum.columns = ['场控姓名', '场控GMV总和', '场控退货GMV总和', '场控GSV总和', '总消耗']
         else:
             df_ck_sum = pd.DataFrame()
 
@@ -485,4 +376,22 @@ def process_excel(order_data, schedule_data):
         return output.getvalue()
 
     except Exception as e:
-        raise Exception(f"数据处理失败: {str(e)}") 
+        raise Exception(f"数据处理失败: {str(e)}")
+
+# 定期清理过期的任务状态
+@app.on_event("startup")
+@app.on_event("shutdown")
+async def cleanup_task_status():
+    while True:
+        current_time = time.time()
+        expired_tasks = []
+        
+        for task_id, task in task_status.items():
+            # 清理超过1小时的任务
+            if current_time - task.get("start_time", current_time) > 3600:
+                expired_tasks.append(task_id)
+        
+        for task_id in expired_tasks:
+            task_status.pop(task_id, None)
+        
+        await asyncio.sleep(3600)  # 每小时清理一次 

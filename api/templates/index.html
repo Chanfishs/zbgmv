@@ -336,31 +336,44 @@
         async function checkTaskStatus(taskId) {
             try {
                 const response = await fetch(`/api/status/${taskId}`);
-                const contentType = response.headers.get('content-type');
                 
-                if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-                    // 任务完成，下载文件
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = '处理结果.xlsx';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    a.remove();
-                    
-                    // 清理状态
-                    clearInterval(statusCheckInterval);
-                    hideProgress();
-                    currentTaskId = null;
-                    return true;
+                // 检查响应状态码
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || '处理失败，请检查文件格式是否正确');
                 }
                 
+                const contentType = response.headers.get('content-type');
+                
+                // 如果是 Excel 文件，说明处理完成
+                if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+                    try {
+                        const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = '处理结果.xlsx';
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+                        a.remove();
+                        
+                        // 清理状态
+                        clearInterval(statusCheckInterval);
+                        hideProgress();
+                        currentTaskId = null;
+                        return true;
+                    } catch (error) {
+                        throw new Error('下载结果文件失败：' + error.message);
+                    }
+                }
+                
+                // 处理 JSON 响应
                 const data = await response.json();
                 
+                // 检查任务状态
                 if (data.status === 'failed') {
-                    throw new Error(data.message);
+                    throw new Error(data.error || '处理失败');
                 }
                 
                 if (data.status === 'processing') {
@@ -409,19 +422,36 @@
                 });
                 
                 if (!response.ok) {
-                    const data = await response.json();
+                    const data = await response.json().catch(() => ({ error: '服务器响应格式错误' }));
                     throw new Error(data.error || '处理失败，请检查文件格式是否正确');
                 }
                 
-                const data = await response.json();
+                let data;
+                try {
+                    data = await response.json();
+                } catch (error) {
+                    throw new Error('服务器响应格式错误');
+                }
+                
+                if (!data.task_id) {
+                    throw new Error('服务器响应缺少任务ID');
+                }
+                
                 currentTaskId = data.task_id;
                 
                 // 开始定期检查任务状态
                 statusCheckInterval = setInterval(async () => {
-                    const isComplete = await checkTaskStatus(currentTaskId);
-                    if (isComplete) {
+                    try {
+                        const isComplete = await checkTaskStatus(currentTaskId);
+                        if (isComplete) {
+                            submitButton.disabled = false;
+                            submitButton.textContent = '开始处理';
+                        }
+                    } catch (error) {
+                        showError(error.message);
                         submitButton.disabled = false;
                         submitButton.textContent = '开始处理';
+                        clearInterval(statusCheckInterval);
                     }
                 }, 1000);
                 
