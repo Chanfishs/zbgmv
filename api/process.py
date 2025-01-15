@@ -123,50 +123,98 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
 def process_excel(order_data, schedule_data):
     """处理 Excel 数据的核心逻辑"""
     try:
-        # 1. 读取订单数据
+        # ========== 第 1 步：读取并过滤原始数据 ==========
+        print("正在读取原始订单数据...")
         df = pd.read_excel(BytesIO(order_data))
-        
+
         # 转为字符串以防后续合并或过滤问题
         df[['主订单编号', '子订单编号', '商品ID']] = df[['主订单编号', '子订单编号', '商品ID']].astype(str)
 
         # 删除"选购商品"列中含有特定关键词的行
         keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
+
         def contains_keywords(text):
-            return any(kw in str(text) for kw in keywords)
+            for kw in keywords:
+                if kw in str(text):
+                    return True
+            return False
 
         df_filtered = df[~df['选购商品'].apply(contains_keywords)]
+
+        # 删除"流量来源"列中含有"精选联盟"的行
         df_filtered = df_filtered[~df_filtered['流量来源'].str.contains('精选联盟', na=False)]
-        
+
         # 根据"流量体裁"筛选
-        df_filtered = pd.concat([
-            df_filtered[(df_filtered['流量体裁'] == '其他') & (df_filtered['订单应付金额'] != 0)],
-            df_filtered[df_filtered['流量体裁'] == '直播'],
-            df_filtered[df_filtered['流量体裁'] == '数据将于第二天更新']
-        ], ignore_index=True)
+        df_filtered_1 = df_filtered[(df_filtered['流量体裁'] == '其他') & (df_filtered['订单应付金额'] != 0)]
+        df_filtered_2 = df_filtered[df_filtered['流量体裁'] == '直播']
+        df_filtered_3 = df_filtered[df_filtered['流量体裁'] == '数据将于第二天更新']
+        df_filtered = pd.concat([df_filtered_1, df_filtered_2, df_filtered_3], ignore_index=True)
 
         # 筛选"取消原因"列为空
         df_filtered = df_filtered[df_filtered['取消原因'].isna()]
-        
-        # 2. 读取排班表
+
+        print("过滤后 df_filtered 行数:", len(df_filtered))
+        if df_filtered.empty:
+            print("警告：过滤后没有任何数据，请检查过滤条件是否过于严格。")
+
+        # ========== 第 2 步：读取"主播排班"工作表 ==========
+        print("正在读取主播排班数据...")
         df_schedule = pd.read_excel(BytesIO(schedule_data))
-        
-        # 3. 统一转换日期/时间类型
-        df_filtered['订单提交日期'] = pd.to_datetime(df_filtered['订单提交日期']).dt.date
-        df_schedule['日期'] = pd.to_datetime(df_schedule['日期']).dt.date
-        
-        for col in ['订单提交时间']:
+
+        # ========== 第 3 步：统一转换日期/时间类型 ==========
+        # 先尝试把这几列都转为字符串并 strip 空格，以排除 Excel 中出现的隐藏字符
+        time_cols = ['订单提交时间']
+        for col in time_cols:
             if col in df_filtered.columns:
-                df_filtered[col] = pd.to_datetime(df_filtered[col].astype(str).str.strip()).dt.time
+                df_filtered[col] = df_filtered[col].astype(str).str.strip()
 
-        for col in ['上播时间', '下播时间']:
+        # 对主播排班表的上播/下播时间做同样处理
+        schedule_time_cols = ['上播时间', '下播时间']
+        for col in schedule_time_cols:
             if col in df_schedule.columns:
-                df_schedule[col] = pd.to_datetime(df_schedule[col].astype(str).str.strip()).dt.time
+                df_schedule[col] = df_schedule[col].astype(str).str.strip()
 
-        # 4. 匹配并统计订单应付金额
-        df_schedule['GMV'] = 0.0
-        df_schedule['退货GMV'] = 0.0
-        df_schedule['GSV'] = 0.0
+        # 让 pandas 自动解析日期/时间格式
+        df_filtered['订单提交日期'] = pd.to_datetime(df_filtered['订单提交日期'], errors='coerce').dt.date
+        df_schedule['日期'] = pd.to_datetime(df_schedule['日期'], errors='coerce').dt.date
 
+        if '订单提交时间' in df_filtered.columns:
+            df_filtered['订单提交时间'] = pd.to_datetime(
+                df_filtered['订单提交时间'],
+                format='%H:%M:%S',
+                errors='coerce'
+            ).dt.time
+
+        if '上播时间' in df_schedule.columns:
+            df_schedule['上播时间'] = pd.to_datetime(
+                df_schedule['上播时间'],
+                format='%H:%M:%S',
+                errors='coerce'
+            ).dt.time
+
+        if '下播时间' in df_schedule.columns:
+            df_schedule['下播时间'] = pd.to_datetime(
+                df_schedule['下播时间'],
+                format='%H:%M:%S',
+                errors='coerce'
+            ).dt.time
+
+        # 打印空值统计
+        print("df_filtered['订单提交日期'] 为空的数量:", df_filtered['订单提交日期'].isna().sum())
+        if '订单提交时间' in df_filtered.columns:
+            print("df_filtered['订单提交时间'] 为空的数量:", df_filtered['订单提交时间'].isna().sum())
+        print("df_schedule['日期'] 为空的数量:", df_schedule['日期'].isna().sum())
+        if '上播时间' in df_schedule.columns:
+            print("df_schedule['上播时间'] 为空的数量:", df_schedule['上播时间'].isna().sum())
+        if '下播时间' in df_schedule.columns:
+            print("df_schedule['下播时间'] 为空的数量:", df_schedule['下播时间'].isna().sum())
+
+        # ========== 第 4 步：匹配并统计"订单应付金额" ==========
+        df_schedule['GMV'] = np.nan
+        df_schedule['退货GMV'] = np.nan
+        df_schedule['GSV'] = np.nan
+
+        print("开始根据日期、时间匹配订单数据...")
         for i, row in df_schedule.iterrows():
             date_schedule = row['日期']
             start_time = row['上播时间']
@@ -181,39 +229,61 @@ def process_excel(order_data, schedule_data):
                 (df_filtered['订单提交时间'] <= end_time)
             )
 
-            # GMV
+            # （A）计算 GMV
             mask_status_GMV = df_filtered['订单状态'].isin(['已发货', '已完成', '已关闭', '待发货'])
             matched_df_GMV = df_filtered[mask_date & mask_time & mask_status_GMV]
-            df_schedule.at[i, 'GMV'] = matched_df_GMV['订单应付金额'].sum()
+            sum_GMV = matched_df_GMV['订单应付金额'].sum()
+            df_schedule.at[i, 'GMV'] = sum_GMV
 
-            # 退货GMV
+            # （B）计算退货GMV
             mask_status_refund = (df_filtered['订单状态'] == '已关闭')
             matched_df_refund = df_filtered[mask_date & mask_time & mask_status_refund]
-            df_schedule.at[i, '退货GMV'] = matched_df_refund['订单应付金额'].sum()
+            sum_refund = matched_df_refund['订单应付金额'].sum()
+            df_schedule.at[i, '退货GMV'] = sum_refund
 
-            # GSV
+            # （C）计算 GSV
             mask_status_GSV = df_filtered['订单状态'].isin(['已发货', '已完成', '待发货'])
             matched_df_GSV = df_filtered[mask_date & mask_time & mask_status_GSV]
-            df_schedule.at[i, 'GSV'] = matched_df_GSV['订单应付金额'].sum()
+            sum_GSV = matched_df_GSV['订单应付金额'].sum()
+            df_schedule.at[i, 'GSV'] = sum_GSV
 
-        # 5. 汇总统计
-        sum_cols = ['GMV', '退货GMV', 'GSV', '时段消耗']
-        
-        # 主播汇总
-        if '主播姓名' in df_schedule.columns:
-            df_anchor_sum = df_schedule.groupby('主播姓名')[sum_cols].sum().reset_index()
-            df_anchor_sum.columns = ['主播姓名', '主播GMV总和', '主播退货GMV总和', '主播GSV总和', '总消耗']
+        # ========== 第 5 步：按「主播姓名」汇总 ==========
+        group_col_anchor = '主播姓名'
+        cols_to_sum = ['GMV', '退货GMV', 'GSV', '时段消耗']
+
+        # 检查列是否存在
+        for col_check in [group_col_anchor, '时段消耗']:
+            if col_check not in df_schedule.columns:
+                print(f"警告：排班表中未找到列：{col_check}，请检查列名。")
+
+        if all(c in df_schedule.columns for c in [group_col_anchor, '时段消耗']):
+            df_anchor_sum = df_schedule.groupby(group_col_anchor, as_index=False)[cols_to_sum].sum()
+            df_anchor_sum.rename(columns={
+                'GMV': '主播GMV总和',
+                '退货GMV': '主播退货GMV总和',
+                'GSV': '主播GSV总和',
+                '时段消耗': '总消耗'
+            }, inplace=True)
         else:
             df_anchor_sum = pd.DataFrame()
 
-        # 场控汇总
-        if '场控姓名' in df_schedule.columns:
-            df_ck_sum = df_schedule.groupby('场控姓名')[sum_cols].sum().reset_index()
-            df_ck_sum.columns = ['场控姓名', '场控GMV总和', '场控退货GMV总和', '场控GSV总和', '总消耗']
+        # ========== 第 6 步：按「场控姓名」汇总 ==========
+        group_col_ck = '场控姓名'
+        if group_col_ck not in df_schedule.columns:
+            print(f"警告：排班表中未找到列：{group_col_ck}，请检查列名。")
+
+        if all(c in df_schedule.columns for c in [group_col_ck, '时段消耗']):
+            df_ck_sum = df_schedule.groupby(group_col_ck, as_index=False)[cols_to_sum].sum()
+            df_ck_sum.rename(columns={
+                'GMV': '场控GMV总和',
+                '退货GMV': '场控退货GMV总和',
+                'GSV': '场控GSV总和',
+                '时段消耗': '总消耗'
+            }, inplace=True)
         else:
             df_ck_sum = pd.DataFrame()
 
-        # 6. 写入结果
+        # ========== 第 7 步：写入结果 ==========
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_filtered.to_excel(writer, sheet_name='主播、场控业绩筛选源表', index=False)
@@ -222,8 +292,9 @@ def process_excel(order_data, schedule_data):
                 df_anchor_sum.to_excel(writer, sheet_name='主播月总业绩汇总', index=False)
             if not df_ck_sum.empty:
                 df_ck_sum.to_excel(writer, sheet_name='场控月总业绩汇总', index=False)
-        
+
         output.seek(0)
         return output.getvalue()
+
     except Exception as e:
         raise Exception(f"数据处理失败: {str(e)}") 
