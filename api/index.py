@@ -5,19 +5,23 @@ import numpy as np
 import os
 from datetime import datetime
 import uuid
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, mkdtemp
+import shutil
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates')
 
 # 配置
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
-app.config['RESULT_FOLDER'] = '/tmp/results'
 app.config['ALLOWED_EXTENSIONS'] = {'xls', 'xlsx'}
 
-# 确保临时目录存在
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['RESULT_FOLDER'], exist_ok=True)
+def get_temp_dir():
+    """获取临时目录"""
+    temp_dir = mkdtemp()
+    uploads = os.path.join(temp_dir, 'uploads')
+    results = os.path.join(temp_dir, 'results')
+    os.makedirs(uploads, exist_ok=True)
+    os.makedirs(results, exist_ok=True)
+    return temp_dir, uploads, results
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -41,28 +45,36 @@ def upload_files():
         if not all(allowed_file(f.filename) for f in [order_file, schedule_file]):
             return jsonify({'success': False, 'message': '不支持的文件类型'}), 400
 
-        # 使用临时文件
-        order_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(order_file.filename))
-        schedule_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(schedule_file.filename))
-        
-        order_file.save(order_path)
-        schedule_file.save(schedule_path)
-        
-        # 处理数据
-        result_filename = f"result_{uuid.uuid4()}.xlsx"
-        result_path = os.path.join(app.config['RESULT_FOLDER'], result_filename)
-        
-        process_data(order_path, schedule_path, result_path)
-        
-        # 清理临时文件
-        os.remove(order_path)
-        os.remove(schedule_path)
-        
-        return jsonify({
-            'success': True,
-            'message': '处理成功',
-            'result_file': result_filename
-        })
+        # 创建临时目录
+        temp_dir, uploads_dir, results_dir = get_temp_dir()
+        try:
+            # 保存上传文件
+            order_path = os.path.join(uploads_dir, secure_filename(order_file.filename))
+            schedule_path = os.path.join(uploads_dir, secure_filename(schedule_file.filename))
+            
+            order_file.save(order_path)
+            schedule_file.save(schedule_path)
+            
+            # 处理数据
+            result_filename = f"result_{uuid.uuid4()}.xlsx"
+            result_path = os.path.join(results_dir, result_filename)
+            
+            process_data(order_path, schedule_path, result_path)
+            
+            # 读取结果文件内容
+            with open(result_path, 'rb') as f:
+                result_content = f.read()
+                
+            return jsonify({
+                'success': True,
+                'message': '处理成功',
+                'result_file': result_filename,
+                'content': result_content.decode('utf-8')
+            })
+            
+        finally:
+            # 清理临时目录
+            shutil.rmtree(temp_dir)
         
     except Exception as e:
         return jsonify({
@@ -73,11 +85,24 @@ def upload_files():
 @app.route('/api/download/<filename>')
 def download_file(filename):
     try:
-        return send_file(
-            os.path.join(app.config['RESULT_FOLDER'], filename),
-            as_attachment=True,
-            download_name=f"统计结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        )
+        # 创建临时目录
+        temp_dir = mkdtemp()
+        file_path = os.path.join(temp_dir, filename)
+        
+        # 从请求中获取文件内容并保存
+        content = request.args.get('content', '').encode('utf-8')
+        with open(file_path, 'wb') as f:
+            f.write(content)
+        
+        try:
+            return send_file(
+                file_path,
+                as_attachment=True,
+                download_name=f"统计结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            )
+        finally:
+            shutil.rmtree(temp_dir)
+            
     except Exception as e:
         return jsonify({
             'success': False,
@@ -228,4 +253,5 @@ def process_data(order_file_path: str, schedule_file_path: str, output_file_path
 
 # Vercel 需要的处理函数
 def handler(request, context):
-    return app(request) 
+    with app.request_context(request):
+        return app.full_dispatch_request() 
