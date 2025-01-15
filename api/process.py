@@ -1,14 +1,23 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import numpy as np
 from io import BytesIO
+from pathlib import Path
 
 app = FastAPI()
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to the Excel Processing API. Please use POST /api/process to upload files."}
+# 设置模板目录
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+# 设置静态文件目录
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/api/process")
 async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):

@@ -1,222 +1,89 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>主播场控业绩统计</title>
-    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .upload-area {
-            border: 2px dashed #ccc;
-            border-radius: 8px;
-            padding: 20px;
-            text-align: center;
-            margin: 20px 0;
-            background-color: #f8f9fa;
-        }
-        .upload-area.dragover {
-            border-color: #0d6efd;
-            background-color: #e9ecef;
-        }
-        #progressArea {
-            display: none;
-        }
-        #resultArea {
-            display: none;
-        }
-        .error-message {
-            color: #dc3545;
-            margin-top: 10px;
-            display: none;
-        }
-    </style>
+    <title>Excel 数据处理 API</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body>
-    <div class="container py-5">
-        <h1 class="text-center mb-4">主播场控业绩统计</h1>
-        
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <form id="uploadForm" class="needs-validation" novalidate>
-                    <!-- 订单文件上传 -->
-                    <div class="mb-4">
-                        <label for="orderFile" class="form-label">抖店订单源表</label>
-                        <div class="upload-area" id="orderUploadArea">
-                            <input type="file" class="form-control" id="orderFile" name="order_file" 
-                                   accept=".xlsx,.xls" required>
-                            <div class="mt-2 text-muted">
-                                支持.xlsx/.xls格式，拖拽文件到此处或点击选择
-                            </div>
-                        </div>
-                        <div class="invalid-feedback">请选择订单文件</div>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
+            <h1 class="text-3xl font-bold text-center mb-8">Excel 数据处理 API</h1>
+            
+            <div class="mb-8">
+                <h2 class="text-xl font-semibold mb-4">文件上传</h2>
+                <form id="uploadForm" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">订单数据文件</label>
+                        <input type="file" name="order_file" accept=".xlsx" required
+                               class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
                     </div>
-
-                    <!-- 排班表文件上传 -->
-                    <div class="mb-4">
-                        <label for="scheduleFile" class="form-label">主播、场控排班表</label>
-                        <div class="upload-area" id="scheduleUploadArea">
-                            <input type="file" class="form-control" id="scheduleFile" name="schedule_file" 
-                                   accept=".xlsx,.xls" required>
-                            <div class="mt-2 text-muted">
-                                支持.xlsx/.xls格式，拖拽文件到此处或点击选择
-                            </div>
-                        </div>
-                        <div class="invalid-feedback">请选择排班表文件</div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">排班表文件</label>
+                        <input type="file" name="schedule_file" accept=".xlsx" required
+                               class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
                     </div>
-
-                    <!-- 提交按钮 -->
-                    <div class="text-center">
-                        <button type="submit" class="btn btn-primary" id="submitBtn">
-                            开始处理
-                        </button>
-                    </div>
+                    <button type="submit"
+                            class="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        处理数据
+                    </button>
                 </form>
+            </div>
 
-                <!-- 进度显示区域 -->
-                <div id="progressArea" class="mt-4">
-                    <div class="progress">
-                        <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                             role="progressbar" style="width: 0%"></div>
-                    </div>
-                    <div class="text-center mt-2" id="progressText">正在处理...</div>
-                </div>
+            <div class="space-y-4">
+                <h2 class="text-xl font-semibold">使用说明</h2>
+                <div class="prose">
+                    <h3 class="text-lg font-medium">Excel 文件格式要求：</h3>
+                    <ul class="list-disc pl-5 space-y-2">
+                        <li>订单数据表必须包含：主订单编号、子订单编号、商品ID等字段</li>
+                        <li>排班表必须包含：日期、上播时间、下播时间等字段</li>
+                    </ul>
 
-                <!-- 错误信息显示 -->
-                <div id="errorMessage" class="alert alert-danger mt-3" style="display: none;">
-                </div>
-
-                <!-- 结果显示区域 -->
-                <div id="resultArea" class="mt-4">
-                    <div class="alert alert-success" role="alert">
-                        处理完成！<a href="#" id="downloadLink" class="alert-link">点击下载结果文件</a>
-                    </div>
+                    <h3 class="text-lg font-medium mt-4">数据处理规则：</h3>
+                    <ul class="list-disc pl-5 space-y-2">
+                        <li>自动过滤特定关键词的商品</li>
+                        <li>自动匹配时间段内的订单</li>
+                        <li>计算 GMV、退货 GMV 和 GSV</li>
+                    </ul>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.2.3/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const form = document.getElementById('uploadForm');
-            const progressArea = document.getElementById('progressArea');
-            const resultArea = document.getElementById('resultArea');
-            const progressBar = document.querySelector('.progress-bar');
-            const progressText = document.getElementById('progressText');
-            const submitBtn = document.getElementById('submitBtn');
-            const downloadLink = document.getElementById('downloadLink');
-            const errorMessage = document.getElementById('errorMessage');
-
-            // 处理文件拖放
-            ['orderUploadArea', 'scheduleUploadArea'].forEach(areaId => {
-                const area = document.getElementById(areaId);
-                const input = area.querySelector('input');
-
-                area.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    area.classList.add('dragover');
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            const orderFile = document.querySelector('input[name="order_file"]').files[0];
+            const scheduleFile = document.querySelector('input[name="schedule_file"]').files[0];
+            
+            formData.append('order_file', orderFile);
+            formData.append('schedule_file', scheduleFile);
+            
+            try {
+                const response = await fetch('/api/process', {
+                    method: 'POST',
+                    body: formData
                 });
-
-                area.addEventListener('dragleave', () => {
-                    area.classList.remove('dragover');
-                });
-
-                area.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    area.classList.remove('dragover');
-                    input.files = e.dataTransfer.files;
-                    // 触发change事件
-                    const event = new Event('change', { bubbles: true });
-                    input.dispatchEvent(event);
-                });
-            });
-
-            // 表单提交处理
-            form.addEventListener('submit', async function(e) {
-                e.preventDefault();
-
-                if (!form.checkValidity()) {
-                    e.stopPropagation();
-                    form.classList.add('was-validated');
-                    return;
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = '处理结果.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                } else {
+                    alert('处理失败，请检查文件格式是否正确');
                 }
-
-                const formData = new FormData(form);
-                submitBtn.disabled = true;
-                progressArea.style.display = 'block';
-                resultArea.style.display = 'none';
-                errorMessage.style.display = 'none';
-                progressBar.style.width = '0%';
-                progressBar.classList.remove('bg-danger');
-                progressText.textContent = '正在上传文件...';
-
-                try {
-                    // 模拟上传进度
-                    let progress = 0;
-                    const progressInterval = setInterval(() => {
-                        if (progress < 90) {
-                            progress += 10;
-                            progressBar.style.width = `${progress}%`;
-                        }
-                    }, 500);
-
-                    const response = await fetch(window.location.origin + '/api/upload', {
-                        method: 'POST',
-                        body: formData,
-                        headers: {
-                            'Accept': 'application/json'
-                        }
-                    });
-
-                    clearInterval(progressInterval);
-
-                    // 解析响应
-                    const contentType = response.headers.get('content-type');
-                    let result;
-                    if (contentType && contentType.includes('application/json')) {
-                        result = await response.json();
-                    } else {
-                        throw new Error('服务器返回格式错误');
-                    }
-
-                    if (!response.ok) {
-                        throw new Error(result.message || '处理失败');
-                    }
-
-                    if (result.success) {
-                        progressBar.style.width = '100%';
-                        progressText.textContent = '处理完成！';
-                        resultArea.style.display = 'block';
-                        // 直接从 base64 创建下载链接
-                        const blob = new Blob(
-                            [Uint8Array.from(atob(result.content), c => c.charCodeAt(0))],
-                            { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
-                        );
-                        downloadLink.href = URL.createObjectURL(blob);
-                        downloadLink.download = `统计结果_${new Date().toISOString().slice(0,19).replace(/[-:]/g, '')}.xlsx`;
-                    } else {
-                        throw new Error(result.message || '处理失败');
-                    }
-                } catch (error) {
-                    progressBar.style.width = '100%';
-                    progressBar.classList.add('bg-danger');
-                    progressText.textContent = '处理失败';
-                    errorMessage.textContent = error.message || '文件处理失败，请重试';
-                    errorMessage.style.display = 'block';
-                } finally {
-                    submitBtn.disabled = false;
-                }
-            });
-
-            // 文件选择变化时清除错误提示
-            document.querySelectorAll('input[type="file"]').forEach(input => {
-                input.addEventListener('change', () => {
-                    errorMessage.style.display = 'none';
-                    progressArea.style.display = 'none';
-                    resultArea.style.display = 'none';
-                    progressBar.classList.remove('bg-danger');
-                });
-            });
+            } catch (error) {
+                alert('上传失败：' + error.message);
+            }
         });
     </script>
 </body>
