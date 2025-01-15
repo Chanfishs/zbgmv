@@ -187,7 +187,13 @@
                         progressBar.style.width = '100%';
                         progressText.textContent = '处理完成！';
                         resultArea.style.display = 'block';
-                        downloadLink.href = window.location.origin + `/api/download/${result.result_file}?content=${result.content}`;
+                        // 直接从 base64 创建下载链接
+                        const blob = new Blob(
+                            [Uint8Array.from(atob(result.content), c => c.charCodeAt(0))],
+                            { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+                        );
+                        downloadLink.href = URL.createObjectURL(blob);
+                        downloadLink.download = `统计结果_${new Date().toISOString().slice(0,19).replace(/[-:]/g, '')}.xlsx`;
                     } else {
                         throw new Error(result.message || '处理失败');
                     }
