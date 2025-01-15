@@ -9,14 +9,15 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from flask_cors import CORS
 import numpy as np
+from tempfile import NamedTemporaryFile
 
 # 配置类移到顶部
 class Config:
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 限制上传文件大小为16MB
-    UPLOAD_FOLDER = 'uploads'
-    RESULT_FOLDER = 'results'
+    UPLOAD_FOLDER = './uploads'
+    RESULT_FOLDER = './results'
     ALLOWED_EXTENSIONS = {'xls', 'xlsx'}
-    LOG_FILE = 'app.log'
+    LOG_FILE = './logs/app.log'
 
 app = Flask(__name__)
 app.config.from_object(Config)  # 加载配置
@@ -75,21 +76,11 @@ def validate_excel_columns(df: pd.DataFrame, required_columns: List[str]) -> Tup
     missing_columns = [col for col in required_columns if col not in df.columns]
     return len(missing_columns) == 0, missing_columns
 
-def save_upload_file(file, folder: str) -> str:
-    """
-    安全地保存上传文件
-    
-    Args:
-        file: 文件对象
-        folder: 保存目录
-        
-    Returns:
-        str: 保存后的文件路径
-    """
-    filename = f"{uuid.uuid4()}_{secure_filename(file.filename)}"
-    filepath = os.path.join(folder, filename)
-    file.save(filepath)
-    return filepath
+def save_upload_file(file):
+    """保存上传文件到临时文件"""
+    temp_file = NamedTemporaryFile(delete=False)
+    file.save(temp_file.name)
+    return temp_file.name
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
@@ -128,9 +119,9 @@ def upload_files():
         os.makedirs(app.config['RESULT_FOLDER'], exist_ok=True)
         
         try:
-            # 保存文件
-            order_path = save_upload_file(order_file, app.config['UPLOAD_FOLDER'])
-            schedule_path = save_upload_file(schedule_file, app.config['UPLOAD_FOLDER'])
+            # 使用临时文件
+            order_path = save_upload_file(order_file)
+            schedule_path = save_upload_file(schedule_file)
             
             # 生成结果文件路径
             result_filename = f"result_{uuid.uuid4()}.xlsx"
@@ -141,10 +132,10 @@ def upload_files():
             
             # 清理临时文件
             try:
-                os.remove(order_path)
-                os.remove(schedule_path)
-            except Exception as e:
-                app.logger.error(f"清理临时文件失败: {str(e)}")
+                os.unlink(order_path)
+                os.unlink(schedule_path)
+            except:
+                pass
             
             return jsonify({
                 'success': True,
@@ -395,4 +386,4 @@ if __name__ == '__main__':
     scheduler.start()
     
     setup_logger()
-    app.run(debug=True) 
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000))) 
