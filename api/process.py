@@ -1,7 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import Response, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -11,9 +10,6 @@ app = FastAPI()
 
 # 设置模板目录
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-
-# 设置静态文件目录
-app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request):
