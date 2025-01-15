@@ -10,6 +10,7 @@ import cgi
 app = Flask(__name__)
 
 def process_excel(order_data, schedule_data):
+    """处理 Excel 数据的核心逻辑"""
     try:
         # 1. 读取订单数据
         df = pd.read_excel(BytesIO(order_data))
