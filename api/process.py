@@ -16,6 +16,23 @@ async def root():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Excel 数据处理 API</title>
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+        <style>
+            .error-message {
+                display: none;
+                margin-top: 1rem;
+                padding: 1rem;
+                border-radius: 0.375rem;
+                background-color: #FEE2E2;
+                border: 1px solid #F87171;
+                color: #B91C1C;
+            }
+            .loading {
+                display: none;
+                margin-top: 1rem;
+                text-align: center;
+                color: #3B82F6;
+            }
+        </style>
     </head>
     <body class="bg-gray-100">
         <div class="container mx-auto px-4 py-8">
@@ -35,11 +52,19 @@ async def root():
                             <input type="file" name="schedule_file" accept=".xlsx" required
                                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
                         </div>
-                        <button type="submit"
+                        <button type="submit" id="submitBtn"
                                 class="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
                             处理数据
                         </button>
                     </form>
+                    <div id="errorMessage" class="error-message"></div>
+                    <div id="loading" class="loading">
+                        <svg class="animate-spin h-5 w-5 mr-3 inline-block" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        正在处理数据，请稍候...
+                    </div>
                 </div>
 
                 <div class="space-y-4">
@@ -63,8 +88,19 @@ async def root():
         </div>
 
         <script>
-            document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            const form = document.getElementById('uploadForm');
+            const submitBtn = document.getElementById('submitBtn');
+            const errorMessage = document.getElementById('errorMessage');
+            const loading = document.getElementById('loading');
+
+            form.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                
+                // 重置状态
+                errorMessage.style.display = 'none';
+                errorMessage.textContent = '';
+                loading.style.display = 'block';
+                submitBtn.disabled = true;
                 
                 const formData = new FormData();
                 const orderFile = document.querySelector('input[name="order_file"]').files[0];
@@ -79,7 +115,9 @@ async def root():
                         body: formData
                     });
                     
-                    if (response.ok) {
+                    const contentType = response.headers.get('content-type');
+                    
+                    if (response.ok && contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
                         const blob = await response.blob();
                         const url = window.URL.createObjectURL(blob);
                         const a = document.createElement('a');
@@ -90,10 +128,16 @@ async def root():
                         window.URL.revokeObjectURL(url);
                         a.remove();
                     } else {
-                        alert('处理失败，请检查文件格式是否正确');
+                        const data = await response.json();
+                        errorMessage.textContent = data.error || '处理失败，请检查文件格式是否正确';
+                        errorMessage.style.display = 'block';
                     }
                 } catch (error) {
-                    alert('上传失败：' + error.message);
+                    errorMessage.textContent = '上传失败：' + error.message;
+                    errorMessage.style.display = 'block';
+                } finally {
+                    loading.style.display = 'none';
+                    submitBtn.disabled = false;
                 }
             });
         </script>
@@ -105,30 +149,68 @@ async def root():
 @app.post("/api/process")
 async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     try:
-        order_data = await order_file.read()
-        schedule_data = await schedule_file.read()
-        
-        result = process_excel(order_data, schedule_data)
-        
-        return Response(
-            content=result,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": "attachment; filename=processed_result.xlsx"
-            }
-        )
+        # 验证文件扩展名
+        if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
+            return {"error": "文件格式错误：请上传 .xlsx 格式的文件"}, 400
+
+        # 读取文件内容
+        try:
+            order_data = await order_file.read()
+            schedule_data = await schedule_file.read()
+        except Exception as e:
+            return {"error": f"文件读取失败：{str(e)}"}, 400
+
+        # 验证文件是否为空
+        if len(order_data) == 0 or len(schedule_data) == 0:
+            return {"error": "文件内容为空"}, 400
+
+        # 处理数据
+        try:
+            result = process_excel(order_data, schedule_data)
+            return Response(
+                content=result,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=processed_result.xlsx"
+                }
+            )
+        except Exception as e:
+            error_msg = str(e)
+            if "KeyError" in error_msg:
+                return {"error": f"文件格式错误：缺少必要的列 {error_msg}"}, 400
+            elif "ValueError" in error_msg:
+                return {"error": f"数据格式错误：{error_msg}"}, 400
+            else:
+                return {"error": f"处理失败：{error_msg}"}, 500
     except Exception as e:
-        return {"error": str(e)}, 500
+        return {"error": f"系统错误：{str(e)}"}, 500
 
 def process_excel(order_data, schedule_data):
     """处理 Excel 数据的核心逻辑"""
     try:
-        # ========== 第 1 步：读取并过滤原始数据 ==========
+        # 验证必要的列是否存在
+        required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
+                                '流量体裁', '取消原因', '订单状态', '订单应付金额', 
+                                '订单提交日期', '订单提交时间']
+        required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
+
+        # ========== 第 1 步：读取并验证原始数据 ==========
         print("正在读取原始订单数据...")
-        df = pd.read_excel(BytesIO(order_data))
+        try:
+            df = pd.read_excel(BytesIO(order_data))
+        except Exception as e:
+            raise Exception(f"订单数据文件读取失败：{str(e)}")
+
+        # 验证订单数据列
+        missing_columns = [col for col in required_order_columns if col not in df.columns]
+        if missing_columns:
+            raise Exception(f"订单数据缺少必要的列：{', '.join(missing_columns)}")
 
         # 转为字符串以防后续合并或过滤问题
-        df[['主订单编号', '子订单编号', '商品ID']] = df[['主订单编号', '子订单编号', '商品ID']].astype(str)
+        try:
+            df[['主订单编号', '子订单编号', '商品ID']] = df[['主订单编号', '子订单编号', '商品ID']].astype(str)
+        except Exception as e:
+            raise Exception(f"订单编号或商品ID格式转换失败：{str(e)}")
 
         # 删除"选购商品"列中含有特定关键词的行
         keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
@@ -157,9 +239,17 @@ def process_excel(order_data, schedule_data):
         if df_filtered.empty:
             print("警告：过滤后没有任何数据，请检查过滤条件是否过于严格。")
 
-        # ========== 第 2 步：读取"主播排班"工作表 ==========
+        # ========== 第 2 步：读取并验证排班表 ==========
         print("正在读取主播排班数据...")
-        df_schedule = pd.read_excel(BytesIO(schedule_data))
+        try:
+            df_schedule = pd.read_excel(BytesIO(schedule_data))
+        except Exception as e:
+            raise Exception(f"排班表文件读取失败：{str(e)}")
+
+        # 验证排班表列
+        missing_columns = [col for col in required_schedule_columns if col not in df_schedule.columns]
+        if missing_columns:
+            raise Exception(f"排班表缺少必要的列：{', '.join(missing_columns)}")
 
         # ========== 第 3 步：统一转换日期/时间类型 ==========
         # 先尝试把这几列都转为字符串并 strip 空格，以排除 Excel 中出现的隐藏字符
