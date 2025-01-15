@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "app.py",
+      "src": "api/index.py",
       "use": "@vercel/python",
       "config": { 
         "runtime": "python3.11",
@@ -12,8 +12,12 @@
   ],
   "routes": [
     {
+      "src": "/api/(.*)",
+      "dest": "api/index.py"
+    },
+    {
       "src": "/(.*)",
-      "dest": "app.py"
+      "dest": "api/index.py"
     }
   ],
   "env": {
