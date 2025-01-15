@@ -45,12 +45,14 @@ async def root():
                         <div>
                             <label class="block text-sm font-medium text-gray-700">订单数据文件</label>
                             <input type="file" name="order_file" accept=".xlsx" required
-                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+                                   onchange="validateFile(this)">
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700">排班表文件</label>
                             <input type="file" name="schedule_file" accept=".xlsx" required
-                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+                                   onchange="validateFile(this)">
                         </div>
                         <button type="submit" id="submitBtn"
                                 class="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -93,6 +95,27 @@ async def root():
             const errorMessage = document.getElementById('errorMessage');
             const loading = document.getElementById('loading');
 
+            function validateFile(input) {
+                const file = input.files[0];
+                if (file) {
+                    if (!file.name.endsWith('.xlsx')) {
+                        errorMessage.textContent = '请上传 .xlsx 格式的文件';
+                        errorMessage.style.display = 'block';
+                        input.value = '';
+                        return false;
+                    }
+                    if (file.size > 10 * 1024 * 1024) {  // 10MB
+                        errorMessage.textContent = '文件大小不能超过 10MB';
+                        errorMessage.style.display = 'block';
+                        input.value = '';
+                        return false;
+                    }
+                    errorMessage.style.display = 'none';
+                    return true;
+                }
+                return false;
+            }
+
             form.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 
@@ -105,6 +128,14 @@ async def root():
                 const formData = new FormData();
                 const orderFile = document.querySelector('input[name="order_file"]').files[0];
                 const scheduleFile = document.querySelector('input[name="schedule_file"]').files[0];
+                
+                if (!orderFile || !scheduleFile) {
+                    errorMessage.textContent = '请选择所有必需的文件';
+                    errorMessage.style.display = 'block';
+                    loading.style.display = 'none';
+                    submitBtn.disabled = false;
+                    return;
+                }
                 
                 formData.append('order_file', orderFile);
                 formData.append('schedule_file', scheduleFile);
@@ -149,24 +180,51 @@ async def root():
 @app.post("/api/process")
 async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     try:
+        print(f"开始处理文件上传...")
+        print(f"订单文件名: {order_file.filename}")
+        print(f"排班表文件名: {schedule_file.filename}")
+        
         # 验证文件扩展名
         if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
+            print("文件格式错误：非 .xlsx 格式")
             return {"error": "文件格式错误：请上传 .xlsx 格式的文件"}, 400
 
         # 读取文件内容
         try:
+            print("正在读取订单文件...")
             order_data = await order_file.read()
+            print(f"订单文件大小: {len(order_data)} bytes")
+            
+            print("正在读取排班表文件...")
             schedule_data = await schedule_file.read()
+            print(f"排班表文件大小: {len(schedule_data)} bytes")
         except Exception as e:
+            print(f"文件读取失败: {str(e)}")
             return {"error": f"文件读取失败：{str(e)}"}, 400
 
         # 验证文件是否为空
         if len(order_data) == 0 or len(schedule_data) == 0:
+            print("文件内容为空")
             return {"error": "文件内容为空"}, 400
+
+        # 尝试预览文件内容
+        try:
+            print("尝试预览订单文件内容...")
+            df_preview = pd.read_excel(BytesIO(order_data), nrows=1)
+            print(f"订单文件列名: {list(df_preview.columns)}")
+            
+            print("尝试预览排班表内容...")
+            schedule_preview = pd.read_excel(BytesIO(schedule_data), nrows=1)
+            print(f"排班表列名: {list(schedule_preview.columns)}")
+        except Exception as e:
+            print(f"文件预览失败: {str(e)}")
+            return {"error": f"文件格式错误：无法读取文件内容，请确保文件为有效的 Excel 文件。详细错误：{str(e)}"}, 400
 
         # 处理数据
         try:
+            print("开始处理数据...")
             result = process_excel(order_data, schedule_data)
+            print("数据处理完成，准备返回结果")
             return Response(
                 content=result,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -176,6 +234,7 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
             )
         except Exception as e:
             error_msg = str(e)
+            print(f"数据处理失败: {error_msg}")
             if "KeyError" in error_msg:
                 return {"error": f"文件格式错误：缺少必要的列 {error_msg}"}, 400
             elif "ValueError" in error_msg:
@@ -183,6 +242,7 @@ async def handle_upload(order_file: UploadFile = File(...), schedule_file: Uploa
             else:
                 return {"error": f"处理失败：{error_msg}"}, 500
     except Exception as e:
+        print(f"系统错误: {str(e)}")
         return {"error": f"系统错误：{str(e)}"}, 500
 
 def process_excel(order_data, schedule_data):
