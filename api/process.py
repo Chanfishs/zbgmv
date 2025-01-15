@@ -6,6 +6,10 @@ from io import BytesIO
 
 app = FastAPI()
 
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Excel Processing API. Please use POST /api/process to upload files."}
+
 @app.post("/api/process")
 async def handle_upload(order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     try:

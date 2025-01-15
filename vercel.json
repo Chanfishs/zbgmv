@@ -15,5 +15,8 @@
       "src": "/(.*)",
       "dest": "api/process.py"
     }
-  ]
+  ],
+  "env": {
+    "PYTHONPATH": "."
+  }
 } 
