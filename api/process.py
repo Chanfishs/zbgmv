@@ -10,60 +10,26 @@ import asyncio
 from typing import Dict
 import uuid
 import time
-import os
-import json
 from datetime import datetime
 
-# 任务状态文件路径
-TASK_STATUS_FILE = "task_status.json"
-
-# 存储任务状态
+# 使用内存存储任务状态
 task_status: Dict[str, dict] = {}
 
-def load_task_status():
-    """从文件加载任务状态"""
-    try:
-        if os.path.exists(TASK_STATUS_FILE):
-            with open(TASK_STATUS_FILE, 'r') as f:
-                loaded_status = json.load(f)
-                # 过滤掉过期的任务
-                current_time = time.time()
-                return {
-                    task_id: task for task_id, task in loaded_status.items()
-                    if current_time - task.get("start_time", 0) <= 3600
-                }
-    except Exception as e:
-        print(f"加载任务状态失败: {str(e)}")
-    return {}
-
-def save_task_status():
-    """保存任务状态到文件"""
-    try:
-        with open(TASK_STATUS_FILE, 'w') as f:
-            json.dump(task_status, f)
-    except Exception as e:
-        print(f"保存任务状态失败: {str(e)}")
-        # 尝试创建目录
-        try:
-            os.makedirs(os.path.dirname(TASK_STATUS_FILE), exist_ok=True)
-            with open(TASK_STATUS_FILE, 'w') as f:
-                json.dump(task_status, f)
-        except Exception as e:
-            print(f"二次尝试保存任务状态失败: {str(e)}")
+# 清理过期任务的时间间隔（秒）
+CLEANUP_INTERVAL = 3600  # 1小时
+# 任务过期时间（秒）
+TASK_EXPIRY = 3600  # 1小时
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """处理应用程序的生命周期事件"""
     # 启动时的操作
     cleanup_task = asyncio.create_task(cleanup_task_status())
-    save_task = asyncio.create_task(periodic_save_task_status())
     yield
     # 关闭时的操作
     cleanup_task.cancel()
-    save_task.cancel()
     try:
         await cleanup_task
-        await save_task
     except asyncio.CancelledError:
         pass
 
@@ -75,6 +41,28 @@ app.mount("/static", StaticFiles(directory="api/static"), name="static")
 # 配置模板
 templates = Jinja2Templates(directory="api/templates")
 
+async def cleanup_task_status():
+    """定期清理过期的任务状态"""
+    while True:
+        try:
+            current_time = time.time()
+            expired_tasks = []
+            
+            for task_id, task in task_status.items():
+                # 清理超过指定时间的任务
+                if current_time - task.get("start_time", current_time) > TASK_EXPIRY:
+                    expired_tasks.append(task_id)
+            
+            for task_id in expired_tasks:
+                task_status.pop(task_id, None)
+            
+            await asyncio.sleep(CLEANUP_INTERVAL)  # 每小时清理一次
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"清理任务状态时出错: {str(e)}")
+            await asyncio.sleep(60)  # 发生错误时等待1分钟后重试
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时加载任务状态"""
@@ -85,31 +73,6 @@ async def startup_event():
 async def shutdown_event():
     """应用关闭时保存任务状态"""
     save_task_status()
-
-async def cleanup_task_status():
-    """定期清理过期的任务状态"""
-    while True:
-        try:
-            current_time = time.time()
-            expired_tasks = []
-            
-            for task_id, task in task_status.items():
-                # 清理超过1小时的任务
-                if current_time - task.get("start_time", current_time) > 3600:
-                    expired_tasks.append(task_id)
-            
-            for task_id in expired_tasks:
-                task_status.pop(task_id, None)
-            
-            # 保存更新后的状态
-            save_task_status()
-            
-            await asyncio.sleep(300)  # 每5分钟清理一次
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"清理任务状态时出错: {str(e)}")
-            await asyncio.sleep(60)  # 发生错误时等待1分钟后重试
 
 async def periodic_save_task_status():
     """定期保存任务状态到文件"""
@@ -146,7 +109,6 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "progress": 10,
             "message": "正在读取数据..."
         })
-        save_task_status()
         
         # 处理数据
         result = await process_excel_async(order_data, schedule_data, task_id)
@@ -158,14 +120,12 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "message": "处理完成",
             "result": result
         })
-        save_task_status()
     except Exception as e:
         # 更新任务状态为失败
         task_status[task_id].update({
             "status": "failed",
             "message": str(e)
         })
-        save_task_status()
 
 @app.post("/api/process")
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
@@ -212,11 +172,8 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             "status": "pending",
             "progress": 0,
             "message": "正在准备处理...",
-            "start_time": time.time()  # 添加开始时间
+            "start_time": time.time()
         }
-        
-        # 保存更新后的状态
-        save_task_status()
         
         # 启动后台任务
         background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
@@ -316,13 +273,18 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             "progress": 20,
             "message": "正在验证数据格式..."
         })
-        save_task_status()
 
         try:
             # 读取订单数据
             df = pd.read_excel(BytesIO(order_data))
         except Exception as e:
             raise Exception(f"读取订单数据失败: {str(e)}")
+
+        # 验证必要的列是否存在
+        required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
+                                '流量体裁', '取消原因', '订单状态', '订单应付金额', 
+                                '订单提交日期', '订单提交时间']
+        required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
 
         try:
             # 验证订单数据列
@@ -336,13 +298,6 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             "progress": 40,
             "message": "正在处理订单数据..."
         })
-        save_task_status()
-
-        # 验证必要的列是否存在
-        required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
-                                '流量体裁', '取消原因', '订单状态', '订单应付金额', 
-                                '订单提交日期', '订单提交时间']
-        required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
 
         # 使用 chunk 处理大数据
         chunk_size = 10000
@@ -453,7 +408,6 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             "progress": 80,
             "message": "正在计算统计数据..."
         })
-        save_task_status()
 
         # ========== 第 4 步：匹配并统计"订单应付金额" ==========
         df_schedule['GMV'] = 0.0
