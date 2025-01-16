@@ -10,28 +10,28 @@ import asyncio
 from typing import Dict
 import uuid
 import time
+import json
+import os
 from datetime import datetime
+import aioredis
 
-# 使用内存存储任务状态
-task_status: Dict[str, dict] = {}
+# Redis 连接
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost')
+redis = None
 
-# 清理过期任务的时间间隔（秒）
-CLEANUP_INTERVAL = 3600  # 1小时
 # 任务过期时间（秒）
 TASK_EXPIRY = 3600  # 1小时
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """处理应用程序的生命周期事件"""
-    # 启动时的操作
-    cleanup_task = asyncio.create_task(cleanup_task_status())
+    # 启动时连接Redis
+    global redis
+    redis = await aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
     yield
-    # 关闭时的操作
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
+    # 关闭时断开Redis连接
+    if redis:
+        await redis.close()
 
 app = FastAPI(title="Excel数据处理系统", lifespan=lifespan)
 
@@ -40,6 +40,27 @@ app.mount("/static", StaticFiles(directory="api/static"), name="static")
 
 # 配置模板
 templates = Jinja2Templates(directory="api/templates")
+
+async def get_task_status(task_id: str) -> dict:
+    """从Redis获取任务状态"""
+    if not redis:
+        raise HTTPException(status_code=500, detail="Redis未连接")
+    
+    status = await redis.get(f"task:{task_id}")
+    if status:
+        return json.loads(status)
+    return None
+
+async def set_task_status(task_id: str, status: dict):
+    """设置任务状态到Redis"""
+    if not redis:
+        raise HTTPException(status_code=500, detail="Redis未连接")
+    
+    await redis.set(
+        f"task:{task_id}",
+        json.dumps(status),
+        ex=TASK_EXPIRY  # 设置过期时间
+    )
 
 async def cleanup_task_status():
     """定期清理过期的任务状态"""
@@ -194,68 +215,65 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         )
 
 @app.get("/api/status/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status_endpoint(task_id: str):
     """获取任务处理状态"""
     try:
-        print(f"正在获取任务状态: {task_id}")  # 添加日志
-        print(f"当前任务列表: {list(task_status.keys())}")  # 添加日志
+        print(f"正在获取任务状态: {task_id}")
         
-        if task_id not in task_status:
-            print(f"任务不存在: {task_id}")  # 添加日志
+        status = await get_task_status(task_id)
+        if not status:
+            print(f"任务不存在: {task_id}")
             return JSONResponse(
                 status_code=404,
                 content={"error": "任务不存在"}
             )
         
-        task = task_status[task_id].copy()  # 创建副本以避免修改原始数据
-        print(f"任务状态: {task}")  # 添加日志
+        print(f"任务状态: {status}")
         
         # 根据任务状态返回不同的响应
-        if task["status"] == "completed":
+        if status["status"] == "completed":
             # 如果任务完成且有结果，返回base64编码的Excel文件
-            result = task.pop("result", None)
+            result = status.get("result")
             if result:
-                print(f"返回任务结果文件: {task_id}")  # 添加日志
-                import base64
-                result_base64 = base64.b64encode(result).decode('utf-8')
+                print(f"返回任务结果文件: {task_id}")
                 return JSONResponse(content={
                     "status": "completed",
                     "progress": 100,
                     "message": "处理完成",
-                    "result": result_base64,
+                    "result": result,
                     "filename": "processed_result.xlsx"
                 })
             # 如果没有结果，返回完成状态
-            print(f"任务完成但无结果: {task_id}")  # 添加日志
+            print(f"任务完成但无结果: {task_id}")
             return JSONResponse(content={
                 "status": "completed",
                 "progress": 100,
                 "message": "处理完成"
             })
             
-        elif task["status"] == "failed":
+        elif status["status"] == "failed":
             # 任务失败时返回错误信息
-            print(f"任务失败: {task_id}, 错误: {task.get('message')}")  # 添加日志
+            print(f"任务失败: {task_id}, 错误: {status.get('message')}")
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "failed",
-                    "message": task.get("message", "处理失败"),
+                    "message": status.get("message", "处理失败"),
                     "progress": 0
                 }
             )
         
         else:
             # 处理中的任务返回进度信息
-            print(f"任务处理中: {task_id}, 进度: {task.get('progress')}%")  # 添加日志
+            print(f"任务处理中: {task_id}, 进度: {status.get('progress')}%")
             return JSONResponse(content={
-                "status": task["status"],
-                "progress": task.get("progress", 0),
-                "message": task.get("message", "正在处理...")
+                "status": status["status"],
+                "progress": status.get("progress", 0),
+                "message": status.get("message", "正在处理...")
             })
             
     except Exception as e:
-        print(f"获取任务状态时出错: {str(e)}")  # 添加日志
+        print(f"获取任务状态时出错: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={
