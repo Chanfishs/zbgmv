@@ -168,19 +168,25 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 async def get_task_status(task_id: str):
     """获取任务处理状态"""
     try:
+        print(f"正在获取任务状态: {task_id}")  # 添加日志
+        print(f"当前任务列表: {list(task_status.keys())}")  # 添加日志
+        
         if task_id not in task_status:
+            print(f"任务不存在: {task_id}")  # 添加日志
             return JSONResponse(
                 status_code=404,
                 content={"error": "任务不存在"}
             )
         
         task = task_status[task_id].copy()  # 创建副本以避免修改原始数据
+        print(f"任务状态: {task}")  # 添加日志
         
         # 根据任务状态返回不同的响应
         if task["status"] == "completed":
             # 如果任务完成且有结果，返回Excel文件
             result = task.pop("result", None)
             if result:
+                print(f"返回任务结果文件: {task_id}")  # 添加日志
                 return Response(
                     content=result,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -189,6 +195,7 @@ async def get_task_status(task_id: str):
                     }
                 )
             # 如果没有结果，返回完成状态
+            print(f"任务完成但无结果: {task_id}")  # 添加日志
             return JSONResponse(content={
                 "status": "completed",
                 "progress": 100,
@@ -197,6 +204,7 @@ async def get_task_status(task_id: str):
             
         elif task["status"] == "failed":
             # 任务失败时返回错误信息
+            print(f"任务失败: {task_id}, 错误: {task.get('message')}")  # 添加日志
             return JSONResponse(
                 status_code=500,
                 content={
@@ -208,6 +216,7 @@ async def get_task_status(task_id: str):
         
         else:
             # 处理中的任务返回进度信息
+            print(f"任务处理中: {task_id}, 进度: {task.get('progress')}%")  # 添加日志
             return JSONResponse(content={
                 "status": task["status"],
                 "progress": task.get("progress", 0),
@@ -215,6 +224,7 @@ async def get_task_status(task_id: str):
             })
             
     except Exception as e:
+        print(f"获取任务状态时出错: {str(e)}")  # 添加日志
         return JSONResponse(
             status_code=500,
             content={
