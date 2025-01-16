@@ -1,5 +1,8 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Request, HTTPException
 from fastapi.responses import Response, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -7,11 +10,67 @@ import asyncio
 from typing import Dict
 import uuid
 import time
-
-app = FastAPI()
+import os
 
 # 存储任务状态
 task_status: Dict[str, dict] = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """处理应用程序的生命周期事件"""
+    # 启动时的操作
+    cleanup_task = asyncio.create_task(cleanup_task_status())
+    yield
+    # 关闭时的操作
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(title="Excel数据处理系统", lifespan=lifespan)
+
+# 配置静态文件
+app.mount("/static", StaticFiles(directory="api/static"), name="static")
+
+# 配置模板
+templates = Jinja2Templates(directory="api/templates")
+
+async def cleanup_task_status():
+    """定期清理过期的任务状态"""
+    while True:
+        try:
+            current_time = time.time()
+            expired_tasks = []
+            
+            for task_id, task in task_status.items():
+                # 清理超过1小时的任务
+                if current_time - task.get("start_time", current_time) > 3600:
+                    expired_tasks.append(task_id)
+            
+            for task_id in expired_tasks:
+                task_status.pop(task_id, None)
+            
+            await asyncio.sleep(3600)  # 每小时清理一次
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"清理任务状态时出错: {str(e)}")
+            await asyncio.sleep(60)  # 发生错误时等待1分钟后重试
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """返回主页"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc: HTTPException):
+    """处理404错误"""
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "error": "页面未找到"},
+        status_code=404
+    )
 
 async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
     """后台处理数据的异步函数"""
@@ -34,12 +93,10 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "result": result
         })
     except Exception as e:
-        error_message = str(e)
-        print(f"处理失败: {error_message}")
         # 更新任务状态为失败
         task_status[task_id].update({
             "status": "failed",
-            "message": error_message
+            "message": str(e)
         })
 
 @app.post("/api/process")
@@ -86,8 +143,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         task_status[task_id] = {
             "status": "pending",
             "progress": 0,
-            "message": "正在准备处理...",
-            "start_time": time.time()
+            "message": "正在准备处理..."
         }
 
         # 启动后台任务
@@ -95,7 +151,6 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 
         # 返回任务ID
         return JSONResponse(
-            status_code=202,  # 使用 202 Accepted 状态码表示请求已接受但处理尚未完成
             content={
                 "task_id": task_id,
                 "message": "文件已接收，正在处理中"
@@ -119,14 +174,13 @@ async def get_task_status(task_id: str):
                 content={"error": "任务不存在"}
             )
         
-        task = task_status[task_id]
+        task = task_status[task_id].copy()  # 创建副本以避免修改原始数据
         
-        # 如果任务已完成并且有结果
-        if task["status"] == "completed" and "result" in task:
-            # 获取结果并从状态中移除
+        # 根据任务状态返回不同的响应
+        if task["status"] == "completed":
+            # 如果任务完成且有结果，返回Excel文件
             result = task.pop("result", None)
             if result:
-                # 返回 Excel 文件
                 return Response(
                     content=result,
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -134,31 +188,40 @@ async def get_task_status(task_id: str):
                         "Content-Disposition": "attachment; filename=processed_result.xlsx"
                     }
                 )
-        
-        # 如果任务失败
-        if task["status"] == "failed":
-            error_message = task.get("message", "未知错误")
+            # 如果没有结果，返回完成状态
+            return JSONResponse(content={
+                "status": "completed",
+                "progress": 100,
+                "message": "处理完成"
+            })
+            
+        elif task["status"] == "failed":
+            # 任务失败时返回错误信息
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "failed",
-                    "error": error_message
+                    "message": task.get("message", "处理失败"),
+                    "progress": 0
                 }
             )
         
-        # 返回当前状态
-        return JSONResponse(
-            content={
+        else:
+            # 处理中的任务返回进度信息
+            return JSONResponse(content={
                 "status": task["status"],
-                "progress": task["progress"],
-                "message": task["message"]
-            }
-        )
-        
+                "progress": task.get("progress", 0),
+                "message": task.get("message", "正在处理...")
+            })
+            
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"error": f"获取任务状态失败：{str(e)}"}
+            content={
+                "status": "error",
+                "message": f"获取任务状态失败：{str(e)}",
+                "progress": 0
+            }
         )
 
 async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: str):
@@ -376,22 +439,4 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         return output.getvalue()
 
     except Exception as e:
-        raise Exception(f"数据处理失败: {str(e)}")
-
-# 定期清理过期的任务状态
-@app.on_event("startup")
-@app.on_event("shutdown")
-async def cleanup_task_status():
-    while True:
-        current_time = time.time()
-        expired_tasks = []
-        
-        for task_id, task in task_status.items():
-            # 清理超过1小时的任务
-            if current_time - task.get("start_time", current_time) > 3600:
-                expired_tasks.append(task_id)
-        
-        for task_id in expired_tasks:
-            task_status.pop(task_id, None)
-        
-        await asyncio.sleep(3600)  # 每小时清理一次 
+        raise Exception(f"数据处理失败: {str(e)}") 
