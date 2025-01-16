@@ -14,6 +14,7 @@ import json
 import os
 from datetime import datetime
 import aioredis
+import base64
 
 # Redis 连接
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost')
@@ -125,25 +126,29 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
     """后台处理数据的异步函数"""
     try:
         # 更新任务状态
-        task_status[task_id].update({
+        await set_task_status(task_id, {
             "status": "processing",
             "progress": 10,
-            "message": "正在读取数据..."
+            "message": "正在读取数据...",
+            "start_time": time.time()
         })
         
         # 处理数据
         result = await process_excel_async(order_data, schedule_data, task_id)
         
+        # 将结果转换为base64
+        result_base64 = base64.b64encode(result).decode('utf-8')
+        
         # 更新任务状态为完成
-        task_status[task_id].update({
+        await set_task_status(task_id, {
             "status": "completed",
             "progress": 100,
             "message": "处理完成",
-            "result": result
+            "result": result_base64
         })
     except Exception as e:
         # 更新任务状态为失败
-        task_status[task_id].update({
+        await set_task_status(task_id, {
             "status": "failed",
             "message": str(e)
         })
@@ -189,12 +194,12 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 
         # 创建任务ID并初始化状态
         task_id = str(uuid.uuid4())
-        task_status[task_id] = {
+        await set_task_status(task_id, {
             "status": "pending",
             "progress": 0,
             "message": "正在准备处理...",
             "start_time": time.time()
-        }
+        })
         
         # 启动后台任务
         background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
@@ -287,7 +292,8 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
     """异步处理 Excel 数据的核心逻辑"""
     try:
         # 更新状态：开始处理
-        task_status[task_id].update({
+        await set_task_status(task_id, {
+            "status": "processing",
             "progress": 20,
             "message": "正在验证数据格式..."
         })
@@ -312,7 +318,9 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         except Exception as e:
             raise Exception(f"验证订单数据列失败: {str(e)}")
 
-        task_status[task_id].update({
+        # 更新进度
+        await set_task_status(task_id, {
+            "status": "processing",
             "progress": 40,
             "message": "正在处理订单数据..."
         })
@@ -348,12 +356,12 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             
             # 更新进度
             progress = 40 + (i + 1) * 20 // total_chunks
-            task_status[task_id].update({
+            await set_task_status(task_id, {
+                "status": "processing",
                 "progress": progress,
                 "message": f"正在处理订单数据... ({i + 1}/{total_chunks})"
             })
             
-            # 让出控制权，避免阻塞
             await asyncio.sleep(0)
 
         df_filtered = pd.concat(df_filtered_list, ignore_index=True)
@@ -361,7 +369,9 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         if df_filtered.empty:
             raise Exception("过滤后没有任何数据，请检查过滤条件是否过于严格或数据是否符合要求")
 
-        task_status[task_id].update({
+        # 更新进度
+        await set_task_status(task_id, {
+            "status": "processing",
             "progress": 60,
             "message": "正在处理排班表..."
         })
@@ -381,7 +391,9 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         except Exception as e:
             raise Exception(f"验证排班表列失败: {str(e)}")
 
-        task_status[task_id].update({
+        # 更新进度
+        await set_task_status(task_id, {
+            "status": "processing",
             "progress": 70,
             "message": "正在处理日期时间数据..."
         })
@@ -422,7 +434,9 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         if date_time_errors:
             raise Exception("日期时间格式错误：" + "；".join(date_time_errors))
 
-        task_status[task_id].update({
+        # 更新进度
+        await set_task_status(task_id, {
+            "status": "processing",
             "progress": 80,
             "message": "正在计算统计数据..."
         })
@@ -473,7 +487,9 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             # 让出控制权
             await asyncio.sleep(0)
 
-        task_status[task_id].update({
+        # 更新进度
+        await set_task_status(task_id, {
+            "status": "processing",
             "progress": 90,
             "message": "正在生成汇总报表..."
         })
