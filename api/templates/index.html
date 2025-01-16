@@ -28,6 +28,33 @@
         .progress-bar-animated {
             transition: width 0.6s ease;
         }
+        .error-message {
+            color: #dc2626;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 0.375rem;
+            background-color: #fee2e2;
+            border: 1px solid #fecaca;
+        }
+        .success-message {
+            color: #059669;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 0.375rem;
+            background-color: #d1fae5;
+            border: 1px solid #a7f3d0;
+        }
+        .drag-drop-zone {
+            border: 2px dashed #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        .drag-drop-zone.drag-over {
+            border-color: #60a5fa;
+            background-color: #eff6ff;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -40,6 +67,13 @@
                     <p class="text-gray-600">自动处理订单数据和排班表，生成业绩统计报表</p>
                 </div>
 
+                <!-- 错误提示 -->
+                {% if error %}
+                <div class="error-message mb-4" role="alert">
+                    {{ error }}
+                </div>
+                {% endif %}
+
                 <!-- 主要内容区 -->
                 <div class="bg-white rounded-xl shadow-lg p-8 mb-8">
                     <div class="mb-8">
@@ -47,103 +81,87 @@
                         <form id="uploadForm" class="space-y-6">
                             <!-- 订单数据文件上传 -->
                             <div class="file-upload-container">
-                                <label class="block">
-                                    <span class="text-gray-700 font-medium">订单数据文件</span>
-                                    <div class="mt-2">
-                                        <div class="file-upload w-full">
-                                            <div class="bg-blue-50 border-2 border-blue-200 border-dashed rounded-lg p-4 text-center hover:bg-blue-100 transition-colors cursor-pointer">
-                                                <span id="orderFileLabel" class="text-blue-600">点击或拖拽文件到此处上传</span>
-                                                <input type="file" name="order_file" accept=".xlsx" required
-                                                    class="hidden" onchange="handleFileSelect(this, 'orderFileLabel', 'orderFileInfo')">
-                                            </div>
-                                        </div>
-                                        <div id="orderFileInfo" class="mt-2 text-sm text-gray-500 hidden">
-                                            <div class="flex items-center space-x-2">
-                                                <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                <div class="drag-drop-zone" id="orderDropZone">
+                                    <label class="block">
+                                        <span class="text-gray-700">订单数据文件</span>
+                                        <input type="file" 
+                                               name="order_file" 
+                                               id="orderFile" 
+                                               accept=".xlsx"
+                                               class="hidden"
+                                               onchange="handleFileSelect(this, 'orderFileName')" />
+                                        <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
+                                            <div class="space-y-1 text-center">
+                                                <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                                                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                                 </svg>
-                                                <span class="file-name"></span>
-                                                <span class="file-size text-gray-400"></span>
+                                                <div class="flex text-sm text-gray-600">
+                                                    <span id="orderFileName">拖拽文件到此处或点击上传</span>
+                                                </div>
+                                                <p class="text-xs text-gray-500">仅支持 .xlsx 格式</p>
                                             </div>
                                         </div>
-                                    </div>
-                                </label>
+                                    </label>
+                                </div>
                             </div>
 
                             <!-- 排班表文件上传 -->
                             <div class="file-upload-container">
-                                <label class="block">
-                                    <span class="text-gray-700 font-medium">排班表文件</span>
-                                    <div class="mt-2">
-                                        <div class="file-upload w-full">
-                                            <div class="bg-blue-50 border-2 border-blue-200 border-dashed rounded-lg p-4 text-center hover:bg-blue-100 transition-colors cursor-pointer">
-                                                <span id="scheduleFileLabel" class="text-blue-600">点击或拖拽文件到此处上传</span>
-                                                <input type="file" name="schedule_file" accept=".xlsx" required
-                                                    class="hidden" onchange="handleFileSelect(this, 'scheduleFileLabel', 'scheduleFileInfo')">
-                                            </div>
-                                        </div>
-                                        <div id="scheduleFileInfo" class="mt-2 text-sm text-gray-500 hidden">
-                                            <div class="flex items-center space-x-2">
-                                                <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                <div class="drag-drop-zone" id="scheduleDropZone">
+                                    <label class="block">
+                                        <span class="text-gray-700">排班表文件</span>
+                                        <input type="file" 
+                                               name="schedule_file" 
+                                               id="scheduleFile" 
+                                               accept=".xlsx"
+                                               class="hidden"
+                                               onchange="handleFileSelect(this, 'scheduleFileName')" />
+                                        <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
+                                            <div class="space-y-1 text-center">
+                                                <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                                                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                                 </svg>
-                                                <span class="file-name"></span>
-                                                <span class="file-size text-gray-400"></span>
+                                                <div class="flex text-sm text-gray-600">
+                                                    <span id="scheduleFileName">拖拽文件到此处或点击上传</span>
+                                                </div>
+                                                <p class="text-xs text-gray-500">仅支持 .xlsx 格式</p>
                                             </div>
                                         </div>
-                                    </div>
-                                </label>
-                            </div>
-                            
-                            <!-- 进度显示 -->
-                            <div id="progressContainer" class="hidden space-y-3">
-                                <div class="flex items-center justify-between text-sm">
-                                    <span id="progressText" class="text-gray-600"></span>
-                                    <span id="progressPercent" class="text-blue-600 font-medium">0%</span>
-                                </div>
-                                <div class="relative">
-                                    <div class="overflow-hidden h-2 text-xs flex rounded bg-blue-100">
-                                        <div id="progressBar" 
-                                             class="progress-bar-animated shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500" 
-                                             style="width: 0%">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- 错误提示 -->
-                            <div id="errorContainer" class="hidden">
-                                <div class="bg-red-50 border-l-4 border-red-400 p-4 rounded">
-                                    <div class="flex">
-                                        <div class="flex-shrink-0">
-                                            <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
-                                            </svg>
-                                        </div>
-                                        <div class="ml-3">
-                                            <p id="errorMessage" class="text-sm text-red-700"></p>
-                                        </div>
-                                    </div>
+                                    </label>
                                 </div>
                             </div>
 
                             <!-- 提交按钮 -->
-                            <button type="submit" id="submitButton"
-                                    class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                                开始处理
-                            </button>
+                            <div class="flex justify-center">
+                                <button type="submit" 
+                                        id="submitBtn"
+                                        class="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors duration-200"
+                                        disabled>
+                                    开始处理
+                                </button>
+                            </div>
                         </form>
                     </div>
 
-                    <!-- 处理状态展示 -->
-                    <div id="processingStatus" class="hidden">
-                        <div class="border-t pt-6">
-                            <h3 class="text-lg font-medium text-gray-900 mb-4">处理进度</h3>
-                            <div class="space-y-4">
-                                <div id="statusSteps" class="space-y-3">
-                                    <!-- 步骤会动态添加在这里 -->
-                                </div>
+                    <!-- 进度显示 -->
+                    <div id="progressContainer" class="hidden">
+                        <div class="mb-4">
+                            <div class="flex justify-between mb-1">
+                                <span class="text-gray-700">处理进度</span>
+                                <span class="text-gray-700" id="progressText">0%</span>
                             </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                <div class="bg-blue-600 h-2.5 rounded-full progress-bar-animated" id="progressBar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <p id="statusMessage" class="text-gray-600 text-center"></p>
+                    </div>
+
+                    <!-- 结果显示 -->
+                    <div id="resultContainer" class="hidden mt-8">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">处理结果</h3>
+                        <div id="resultContent" class="bg-gray-50 rounded-lg p-4">
+                            <!-- 结果内容将通过 JavaScript 动态插入 -->
                         </div>
                     </div>
                 </div>
@@ -151,36 +169,29 @@
                 <!-- 使用说明 -->
                 <div class="bg-white rounded-xl shadow-lg p-8">
                     <h2 class="text-2xl font-semibold text-gray-800 mb-6">使用说明</h2>
-                    <div class="space-y-6">
+                    <div class="space-y-4 text-gray-600">
                         <div>
-                            <h3 class="text-lg font-medium text-gray-900 mb-3">Excel 文件格式要求</h3>
-                            <ul class="list-disc pl-5 space-y-2 text-gray-600">
-                                <li>订单数据表必须包含：
-                                    <span class="text-blue-600">主订单编号、子订单编号、商品ID、选购商品、流量来源、流量体裁、取消原因、订单状态、订单应付金额、订单提交日期、订单提交时间</span>
-                                </li>
-                                <li>排班表必须包含：
-                                    <span class="text-blue-600">日期、上播时间、下播时间、主播姓名、场控姓名、时段消耗</span>
-                                </li>
+                            <h3 class="font-medium text-gray-900 mb-2">订单数据要求</h3>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li>文件格式：Excel (.xlsx)</li>
+                                <li>必需字段：主订单编号、子订单编号、商品ID等</li>
+                                <li>数据格式要求：日期格式统一</li>
                             </ul>
                         </div>
-
                         <div>
-                            <h3 class="text-lg font-medium text-gray-900 mb-3">数据处理规则</h3>
-                            <ul class="list-disc pl-5 space-y-2 text-gray-600">
-                                <li>自动过滤包含特定关键词的商品记录</li>
-                                <li>自动匹配指定时间段内的订单数据</li>
-                                <li>计算并汇总 GMV、退货 GMV 和 GSV 数据</li>
-                                <li>生成主播和场控的业绩汇总报表</li>
+                            <h3 class="font-medium text-gray-900 mb-2">排班表要求</h3>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li>文件格式：Excel (.xlsx)</li>
+                                <li>必需字段：日期、上播时间、下播时间等</li>
+                                <li>时间格式：YYYY-MM-DD HH:mm:ss</li>
                             </ul>
                         </div>
-
                         <div>
-                            <h3 class="text-lg font-medium text-gray-900 mb-3">注意事项</h3>
-                            <ul class="list-disc pl-5 space-y-2 text-gray-600">
-                                <li>文件大小限制：<span class="text-blue-600">100MB</span></li>
-                                <li>仅支持 <span class="text-blue-600">.xlsx</span> 格式的 Excel 文件</li>
-                                <li>请确保数据格式正确，避免空值和错误格式</li>
-                                <li>处理大文件可能需要较长时间，请耐心等待</li>
+                            <h3 class="font-medium text-gray-900 mb-2">注意事项</h3>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li>文件大小限制：100MB</li>
+                                <li>处理时间视数据量而定</li>
+                                <li>请确保数据完整性和格式正确性</li>
                             </ul>
                         </div>
                     </div>
@@ -190,284 +201,182 @@
     </div>
 
     <script>
-        // 文件大小限制（100MB）
-        const MAX_FILE_SIZE = 100 * 1024 * 1024;
-        let currentTaskId = null;
-        let statusCheckInterval = null;
-        
-        // 处理文件选择
-        function handleFileSelect(input, labelId, infoId) {
-            const file = input.files[0];
-            const label = document.getElementById(labelId);
-            const info = document.getElementById(infoId);
-            
-            if (file) {
-                try {
-                    validateFile(file);
-                    
-                    // 更新文件信息显示
-                    info.classList.remove('hidden');
-                    info.querySelector('.file-name').textContent = file.name;
-                    info.querySelector('.file-size').textContent = `(${formatFileSize(file.size)})`;
-                    
-                    // 更新上传区域文字
-                    label.textContent = '文件已选择，点击更换';
-                    
-                    hideError();
-                } catch (error) {
-                    showError(error.message);
-                    input.value = '';
-                    info.classList.add('hidden');
-                    label.textContent = '点击或拖拽文件到此处上传';
-                }
-            }
+        // 文件处理相关变量
+        let taskId = null;
+        let progressCheckInterval = null;
+
+        // 文件选择处理
+        function handleFileSelect(input, displayId) {
+            const fileName = input.files[0]?.name || '拖拽文件到此处或点击上传';
+            document.getElementById(displayId).textContent = fileName;
+            updateSubmitButtonState();
         }
 
-        // 格式化文件大小
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        // 更新提交按钮状态
+        function updateSubmitButtonState() {
+            const orderFile = document.getElementById('orderFile').files[0];
+            const scheduleFile = document.getElementById('scheduleFile').files[0];
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = !(orderFile && scheduleFile);
         }
 
-        // 显示错误信息
-        function showError(message) {
-            const errorContainer = document.getElementById('errorContainer');
-            const errorMessage = document.getElementById('errorMessage');
-            errorContainer.classList.remove('hidden');
-            errorMessage.textContent = message;
-        }
+        // 拖放功能
+        ['orderDropZone', 'scheduleDropZone'].forEach(zoneId => {
+            const zone = document.getElementById(zoneId);
+            const input = zone.querySelector('input[type="file"]');
 
-        // 隐藏错误信息
-        function hideError() {
-            const errorContainer = document.getElementById('errorContainer');
-            errorContainer.classList.add('hidden');
-        }
-
-        // 显示进度
-        function showProgress() {
-            const progressContainer = document.getElementById('progressContainer');
-            const processingStatus = document.getElementById('processingStatus');
-            progressContainer.classList.remove('hidden');
-            processingStatus.classList.remove('hidden');
-        }
-
-        // 隐藏进度
-        function hideProgress() {
-            const progressContainer = document.getElementById('progressContainer');
-            const processingStatus = document.getElementById('processingStatus');
-            progressContainer.classList.add('hidden');
-            processingStatus.classList.add('hidden');
-        }
-
-        // 更新进度条
-        function updateProgress(percent, message) {
-            const progressBar = document.getElementById('progressBar');
-            const progressText = document.getElementById('progressText');
-            const progressPercent = document.getElementById('progressPercent');
-            
-            progressBar.style.width = `${percent}%`;
-            progressText.textContent = message || '处理中...';
-            progressPercent.textContent = `${percent}%`;
-            
-            // 更新处理状态步骤
-            updateProcessingStatus(percent, message);
-        }
-
-        // 更新处理状态步骤
-        function updateProcessingStatus(percent, message) {
-            const statusSteps = document.getElementById('statusSteps');
-            const steps = [
-                { percent: 0, message: '准备处理文件...' },
-                { percent: 20, message: '验证数据格式...' },
-                { percent: 40, message: '处理订单数据...' },
-                { percent: 60, message: '处理排班表...' },
-                { percent: 80, message: '生成统计数据...' },
-                { percent: 100, message: '完成处理' }
-            ];
-            
-            // 清空现有步骤
-            statusSteps.innerHTML = '';
-            
-            // 添加所有步骤
-            steps.forEach((step, index) => {
-                const isActive = percent >= step.percent;
-                const isCurrent = index === steps.findIndex(s => percent < s.percent);
-                
-                const stepElement = document.createElement('div');
-                stepElement.className = 'flex items-center space-x-3';
-                stepElement.innerHTML = `
-                    <div class="flex-shrink-0">
-                        <div class="w-6 h-6 rounded-full flex items-center justify-center ${
-                            isActive ? 'bg-blue-500' : 'bg-gray-200'
-                        } ${isCurrent ? 'animate-pulse' : ''}">
-                            ${isActive ? 
-                                `<svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                </svg>` :
-                                `<span class="w-2 h-2 bg-gray-400 rounded-full"></span>`
-                            }
-                        </div>
-                    </div>
-                    <div class="flex-grow">
-                        <p class="text-sm ${isActive ? 'text-gray-900' : 'text-gray-500'} ${isCurrent ? 'font-medium' : ''}">${step.message}</p>
-                    </div>
-                `;
-                statusSteps.appendChild(stepElement);
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                zone.classList.add('drag-over');
             });
-        }
 
-        // 验证文件
-        function validateFile(file) {
-            if (file.size > MAX_FILE_SIZE) {
-                throw new Error(`文件过大，请确保文件小于 ${formatFileSize(MAX_FILE_SIZE)}`);
-            }
+            zone.addEventListener('dragleave', () => {
+                zone.classList.remove('drag-over');
+            });
 
-            if (!file.name.toLowerCase().endsWith('.xlsx')) {
-                throw new Error('请上传 .xlsx 格式的 Excel 文件');
-            }
-
-            return true;
-        }
-
-        // 检查任务状态
-        async function checkTaskStatus(taskId) {
-            try {
-                const response = await fetch(`/api/status/${taskId}`);
-                const contentType = response.headers.get('content-type');
-                
-                if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-                    // 任务完成，下载文件
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = '处理结果.xlsx';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    a.remove();
-                    
-                    // 清理状态
-                    clearInterval(statusCheckInterval);
-                    hideProgress();
-                    currentTaskId = null;
-                    return true;
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('drag-over');
+                const file = e.dataTransfer.files[0];
+                if (file && file.name.endsWith('.xlsx')) {
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(file);
+                    input.files = dataTransfer.files;
+                    handleFileSelect(input, zoneId === 'orderDropZone' ? 'orderFileName' : 'scheduleFileName');
                 }
-                
-                const data = await response.json();
-                
-                if (data.status === 'failed') {
-                    throw new Error(data.message);
-                }
-                
-                if (data.status === 'processing') {
-                    updateProgress(data.progress, data.message);
-                    return false;
-                }
-                
-                return false;
-            } catch (error) {
-                clearInterval(statusCheckInterval);
-                showError(error.message);
-                hideProgress();
-                currentTaskId = null;
-                return true;
-            }
-        }
+            });
+        });
 
         // 表单提交处理
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            hideError();
             
-            const submitButton = document.getElementById('submitButton');
-            const orderFile = document.querySelector('input[name="order_file"]').files[0];
-            const scheduleFile = document.querySelector('input[name="schedule_file"]').files[0];
+            const formData = new FormData();
+            const orderFile = document.getElementById('orderFile').files[0];
+            const scheduleFile = document.getElementById('scheduleFile').files[0];
             
+            // 文件大小检查
+            const maxSize = 100 * 1024 * 1024; // 100MB
+            if (orderFile.size > maxSize || scheduleFile.size > maxSize) {
+                showError('文件大小超过限制（100MB）');
+                return;
+            }
+
+            formData.append('order_file', orderFile);
+            formData.append('schedule_file', scheduleFile);
+
             try {
-                // 验证文件
-                validateFile(orderFile);
-                validateFile(scheduleFile);
-
-                const formData = new FormData();
-                formData.append('order_file', orderFile);
-                formData.append('schedule_file', scheduleFile);
-                
                 // 禁用提交按钮
-                submitButton.disabled = true;
-                submitButton.textContent = '处理中...';
-                
-                showProgress();
-                updateProgress(0, '正在上传文件...');
+                const submitBtn = document.getElementById('submitBtn');
+                submitBtn.disabled = true;
+                submitBtn.textContent = '处理中...';
 
+                // 显示进度条
+                document.getElementById('progressContainer').classList.remove('hidden');
+                document.getElementById('resultContainer').classList.add('hidden');
+
+                // 发送请求
                 const response = await fetch('/api/process', {
                     method: 'POST',
                     body: formData
                 });
-                
+
                 if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.error || '处理失败，请检查文件格式是否正确');
+                    throw new Error('上传失败');
                 }
-                
+
                 const data = await response.json();
-                currentTaskId = data.task_id;
-                
-                // 开始定期检查任务状态
-                statusCheckInterval = setInterval(async () => {
-                    const isComplete = await checkTaskStatus(currentTaskId);
-                    if (isComplete) {
-                        submitButton.disabled = false;
-                        submitButton.textContent = '开始处理';
-                    }
-                }, 1000);
-                
+                taskId = data.task_id;
+
+                // 开始检查进度
+                startProgressCheck();
+
             } catch (error) {
                 showError(error.message);
-                hideProgress();
-                submitButton.disabled = false;
-                submitButton.textContent = '开始处理';
+                resetForm();
             }
         });
 
-        // 拖拽上传支持
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            document.querySelectorAll('.file-upload').forEach(uploadArea => {
-                uploadArea.addEventListener(eventName, preventDefaults, false);
-            });
-        });
+        // 开始检查进度
+        function startProgressCheck() {
+            if (progressCheckInterval) {
+                clearInterval(progressCheckInterval);
+            }
 
-        function preventDefaults (e) {
-            e.preventDefault();
-            e.stopPropagation();
+            progressCheckInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/status/${taskId}`);
+                    const data = await response.json();
+
+                    updateProgress(data);
+
+                    if (data.status === 'completed' || data.status === 'failed') {
+                        clearInterval(progressCheckInterval);
+                        if (data.status === 'completed') {
+                            showResult(data.result);
+                        } else {
+                            showError(data.message);
+                        }
+                        resetForm();
+                    }
+                } catch (error) {
+                    clearInterval(progressCheckInterval);
+                    showError('检查进度失败');
+                    resetForm();
+                }
+            }, 1000);
         }
 
-        document.querySelectorAll('.file-upload').forEach(uploadArea => {
-            uploadArea.addEventListener('drop', handleDrop, false);
-            
-            uploadArea.addEventListener('dragenter', function() {
-                this.classList.add('border-blue-500');
-            });
-            
-            uploadArea.addEventListener('dragleave', function() {
-                this.classList.remove('border-blue-500');
-            });
-        });
+        // 更新进度显示
+        function updateProgress(data) {
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const statusMessage = document.getElementById('statusMessage');
 
-        function handleDrop(e) {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            const input = this.querySelector('input[type="file"]');
+            progressBar.style.width = `${data.progress || 0}%`;
+            progressText.textContent = `${data.progress || 0}%`;
+            statusMessage.textContent = data.message || '';
+        }
+
+        // 显示结果
+        function showResult(result) {
+            const resultContainer = document.getElementById('resultContainer');
+            const resultContent = document.getElementById('resultContent');
             
-            if (files.length > 0) {
-                input.files = files;
-                input.dispatchEvent(new Event('change'));
-            }
+            resultContainer.classList.remove('hidden');
+            resultContent.innerHTML = `
+                <div class="success-message">处理完成</div>
+                <div class="mt-4">
+                    <h4 class="font-medium text-gray-900 mb-2">统计结果</h4>
+                    <pre class="bg-gray-100 p-4 rounded-lg overflow-x-auto">${JSON.stringify(result, null, 2)}</pre>
+                </div>
+            `;
+        }
+
+        // 显示错误信息
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error-message';
+            errorDiv.textContent = message;
             
-            this.classList.remove('border-blue-500');
+            const form = document.getElementById('uploadForm');
+            form.insertBefore(errorDiv, form.firstChild);
+
+            setTimeout(() => {
+                errorDiv.remove();
+            }, 5000);
+        }
+
+        // 重置表单
+        function resetForm() {
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = false;
+            submitBtn.textContent = '开始处理';
+            
+            document.getElementById('progressContainer').classList.add('hidden');
+            document.getElementById('progressBar').style.width = '0%';
+            document.getElementById('progressText').textContent = '0%';
+            document.getElementById('statusMessage').textContent = '';
         }
     </script>
 </body>
