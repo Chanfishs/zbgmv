@@ -20,6 +20,14 @@
       "dest": "api/static/favicon.ico"
     },
     {
+      "src": "/api/status/.*",
+      "dest": "api/process.py"
+    },
+    {
+      "src": "/api/process",
+      "dest": "api/process.py"
+    },
+    {
       "src": "/(.*)",
       "dest": "api/process.py"
     }
