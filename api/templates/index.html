@@ -297,6 +297,50 @@
             }
         });
 
+        // 显示结果
+        function showResult() {
+            const resultContainer = document.getElementById('resultContainer');
+            const resultContent = document.getElementById('resultContent');
+            
+            resultContainer.classList.remove('hidden');
+            resultContent.innerHTML = `
+                <div class="success-message">处理完成</div>
+                <div class="mt-4 text-center">
+                    <button onclick="downloadResult()" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                        下载结果文件
+                    </button>
+                </div>
+            `;
+        }
+
+        // 下载结果文件
+        function downloadResult() {
+            const response = JSON.parse(sessionStorage.getItem('lastResult'));
+            if (!response || !response.result) {
+                showError('结果文件不存在');
+                return;
+            }
+
+            // 将 base64 转换为 Blob
+            const byteCharacters = atob(response.result);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+
+            // 创建下载链接
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = response.filename || 'processed_result.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }
+
         // 开始检查进度
         function startProgressCheck() {
             if (progressCheckInterval) {
@@ -313,7 +357,9 @@
                     if (data.status === 'completed' || data.status === 'failed') {
                         clearInterval(progressCheckInterval);
                         if (data.status === 'completed') {
-                            showResult(data.result);
+                            // 保存结果以供下载
+                            sessionStorage.setItem('lastResult', JSON.stringify(data));
+                            showResult();
                         } else {
                             showError(data.message);
                         }
@@ -336,21 +382,6 @@
             progressBar.style.width = `${data.progress || 0}%`;
             progressText.textContent = `${data.progress || 0}%`;
             statusMessage.textContent = data.message || '';
-        }
-
-        // 显示结果
-        function showResult(result) {
-            const resultContainer = document.getElementById('resultContainer');
-            const resultContent = document.getElementById('resultContent');
-            
-            resultContainer.classList.remove('hidden');
-            resultContent.innerHTML = `
-                <div class="success-message">处理完成</div>
-                <div class="mt-4">
-                    <h4 class="font-medium text-gray-900 mb-2">统计结果</h4>
-                    <pre class="bg-gray-100 p-4 rounded-lg overflow-x-auto">${JSON.stringify(result, null, 2)}</pre>
-                </div>
-            `;
         }
 
         // 显示错误信息

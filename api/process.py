@@ -11,20 +11,59 @@ from typing import Dict
 import uuid
 import time
 import os
+import json
+from datetime import datetime
+
+# 任务状态文件路径
+TASK_STATUS_FILE = "task_status.json"
 
 # 存储任务状态
 task_status: Dict[str, dict] = {}
+
+def load_task_status():
+    """从文件加载任务状态"""
+    try:
+        if os.path.exists(TASK_STATUS_FILE):
+            with open(TASK_STATUS_FILE, 'r') as f:
+                loaded_status = json.load(f)
+                # 过滤掉过期的任务
+                current_time = time.time()
+                return {
+                    task_id: task for task_id, task in loaded_status.items()
+                    if current_time - task.get("start_time", 0) <= 3600
+                }
+    except Exception as e:
+        print(f"加载任务状态失败: {str(e)}")
+    return {}
+
+def save_task_status():
+    """保存任务状态到文件"""
+    try:
+        with open(TASK_STATUS_FILE, 'w') as f:
+            json.dump(task_status, f)
+    except Exception as e:
+        print(f"保存任务状态失败: {str(e)}")
+        # 尝试创建目录
+        try:
+            os.makedirs(os.path.dirname(TASK_STATUS_FILE), exist_ok=True)
+            with open(TASK_STATUS_FILE, 'w') as f:
+                json.dump(task_status, f)
+        except Exception as e:
+            print(f"二次尝试保存任务状态失败: {str(e)}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """处理应用程序的生命周期事件"""
     # 启动时的操作
     cleanup_task = asyncio.create_task(cleanup_task_status())
+    save_task = asyncio.create_task(periodic_save_task_status())
     yield
     # 关闭时的操作
     cleanup_task.cancel()
+    save_task.cancel()
     try:
         await cleanup_task
+        await save_task
     except asyncio.CancelledError:
         pass
 
@@ -35,6 +74,17 @@ app.mount("/static", StaticFiles(directory="api/static"), name="static")
 
 # 配置模板
 templates = Jinja2Templates(directory="api/templates")
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时加载任务状态"""
+    global task_status
+    task_status = load_task_status()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时保存任务状态"""
+    save_task_status()
 
 async def cleanup_task_status():
     """定期清理过期的任务状态"""
@@ -51,12 +101,27 @@ async def cleanup_task_status():
             for task_id in expired_tasks:
                 task_status.pop(task_id, None)
             
-            await asyncio.sleep(3600)  # 每小时清理一次
+            # 保存更新后的状态
+            save_task_status()
+            
+            await asyncio.sleep(300)  # 每5分钟清理一次
         except asyncio.CancelledError:
             break
         except Exception as e:
             print(f"清理任务状态时出错: {str(e)}")
             await asyncio.sleep(60)  # 发生错误时等待1分钟后重试
+
+async def periodic_save_task_status():
+    """定期保存任务状态到文件"""
+    while True:
+        try:
+            save_task_status()
+            await asyncio.sleep(60)  # 每分钟保存一次
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"保存任务状态时出错: {str(e)}")
+            await asyncio.sleep(10)  # 发生错误时等待10秒后重试
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -81,6 +146,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "progress": 10,
             "message": "正在读取数据..."
         })
+        save_task_status()
         
         # 处理数据
         result = await process_excel_async(order_data, schedule_data, task_id)
@@ -92,12 +158,14 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "message": "处理完成",
             "result": result
         })
+        save_task_status()
     except Exception as e:
         # 更新任务状态为失败
         task_status[task_id].update({
             "status": "failed",
             "message": str(e)
         })
+        save_task_status()
 
 @app.post("/api/process")
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
@@ -143,9 +211,13 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         task_status[task_id] = {
             "status": "pending",
             "progress": 0,
-            "message": "正在准备处理..."
+            "message": "正在准备处理...",
+            "start_time": time.time()  # 添加开始时间
         }
-
+        
+        # 保存更新后的状态
+        save_task_status()
+        
         # 启动后台任务
         background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
 
@@ -183,17 +255,19 @@ async def get_task_status(task_id: str):
         
         # 根据任务状态返回不同的响应
         if task["status"] == "completed":
-            # 如果任务完成且有结果，返回Excel文件
+            # 如果任务完成且有结果，返回base64编码的Excel文件
             result = task.pop("result", None)
             if result:
                 print(f"返回任务结果文件: {task_id}")  # 添加日志
-                return Response(
-                    content=result,
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={
-                        "Content-Disposition": "attachment; filename=processed_result.xlsx"
-                    }
-                )
+                import base64
+                result_base64 = base64.b64encode(result).decode('utf-8')
+                return JSONResponse(content={
+                    "status": "completed",
+                    "progress": 100,
+                    "message": "处理完成",
+                    "result": result_base64,
+                    "filename": "processed_result.xlsx"
+                })
             # 如果没有结果，返回完成状态
             print(f"任务完成但无结果: {task_id}")  # 添加日志
             return JSONResponse(content={
@@ -242,30 +316,33 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             "progress": 20,
             "message": "正在验证数据格式..."
         })
+        save_task_status()
+
+        try:
+            # 读取订单数据
+            df = pd.read_excel(BytesIO(order_data))
+        except Exception as e:
+            raise Exception(f"读取订单数据失败: {str(e)}")
+
+        try:
+            # 验证订单数据列
+            missing_columns = [col for col in required_order_columns if col not in df.columns]
+            if missing_columns:
+                raise Exception(f"订单数据缺少必要的列：{', '.join(missing_columns)}")
+        except Exception as e:
+            raise Exception(f"验证订单数据列失败: {str(e)}")
+
+        task_status[task_id].update({
+            "progress": 40,
+            "message": "正在处理订单数据..."
+        })
+        save_task_status()
 
         # 验证必要的列是否存在
         required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
                                 '流量体裁', '取消原因', '订单状态', '订单应付金额', 
                                 '订单提交日期', '订单提交时间']
         required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
-
-        # ========== 第 1 步：读取并验证原始数据 ==========
-        task_status[task_id].update({
-            "progress": 30,
-            "message": "正在读取订单数据..."
-        })
-
-        df = pd.read_excel(BytesIO(order_data))
-        
-        # 验证订单数据列
-        missing_columns = [col for col in required_order_columns if col not in df.columns]
-        if missing_columns:
-            raise Exception(f"订单数据缺少必要的列：{', '.join(missing_columns)}")
-
-        task_status[task_id].update({
-            "progress": 40,
-            "message": "正在处理订单数据..."
-        })
 
         # 使用 chunk 处理大数据
         chunk_size = 10000
@@ -317,12 +394,19 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         })
 
         # ========== 第 2 步：读取并验证排班表 ==========
-        df_schedule = pd.read_excel(BytesIO(schedule_data))
-        
-        # 验证排班表列
-        missing_columns = [col for col in required_schedule_columns if col not in df_schedule.columns]
-        if missing_columns:
-            raise Exception(f"排班表缺少必要的列：{', '.join(missing_columns)}")
+        try:
+            # 读取排班表
+            df_schedule = pd.read_excel(BytesIO(schedule_data))
+        except Exception as e:
+            raise Exception(f"读取排班表失败: {str(e)}")
+
+        try:
+            # 验证排班表列
+            missing_columns = [col for col in required_schedule_columns if col not in df_schedule.columns]
+            if missing_columns:
+                raise Exception(f"排班表缺少必要的列：{', '.join(missing_columns)}")
+        except Exception as e:
+            raise Exception(f"验证排班表列失败: {str(e)}")
 
         task_status[task_id].update({
             "progress": 70,
@@ -331,8 +415,11 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
 
         # ========== 第 3 步：统一转换日期/时间类型 ==========
         # 处理日期时间转换
-        df_filtered['订单提交日期'] = pd.to_datetime(df_filtered['订单提交日期'], errors='coerce').dt.date
-        df_schedule['日期'] = pd.to_datetime(df_schedule['日期'], errors='coerce').dt.date
+        try:
+            df_filtered['订单提交日期'] = pd.to_datetime(df_filtered['订单提交日期'], errors='coerce').dt.date
+            df_schedule['日期'] = pd.to_datetime(df_schedule['日期'], errors='coerce').dt.date
+        except Exception as e:
+            raise Exception(f"日期转换失败: {str(e)}")
         
         for df, time_cols in [
             (df_filtered, ['订单提交时间']),
@@ -366,6 +453,7 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             "progress": 80,
             "message": "正在计算统计数据..."
         })
+        save_task_status()
 
         # ========== 第 4 步：匹配并统计"订单应付金额" ==========
         df_schedule['GMV'] = 0.0
@@ -449,4 +537,19 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         return output.getvalue()
 
     except Exception as e:
-        raise Exception(f"数据处理失败: {str(e)}") 
+        error_msg = f"数据处理失败: {str(e)}"
+        print(error_msg)  # 打印错误日志
+        raise Exception(error_msg)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常处理器"""
+    error_msg = str(exc)
+    print(f"全局异常: {error_msg}")  # 打印错误日志
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": error_msg,
+            "path": request.url.path
+        }
+    ) 

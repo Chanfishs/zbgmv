@@ -31,21 +31,31 @@ env/
 .vscode/
 *.swp
 *.swo
-.DS_Store
+.cursorrules/
 
-# Logs
+# Logs and databases
 *.log
+*.sqlite
 logs/
-log/
+task_status.json
 
-# Local development settings
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+test_files/
 
-# Node modules
-node_modules/
+# Temporary files
+.DS_Store
+._.DS_Store
+**/.DS_Store
+**/._.DS_Store
+*.tmp
+*.bak
+*.swp
+uploads/
+results/
 
-# Vercel
-.vercel/ 
+# Project specific
+example/
+.vercel 
