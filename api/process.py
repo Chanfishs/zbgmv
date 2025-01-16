@@ -7,7 +7,6 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import asyncio
-from typing import Dict
 import uuid
 import time
 import json
@@ -63,51 +62,6 @@ async def set_task_status(task_id: str, status: dict):
         ex=TASK_EXPIRY  # 设置过期时间
     )
 
-async def cleanup_task_status():
-    """定期清理过期的任务状态"""
-    while True:
-        try:
-            current_time = time.time()
-            expired_tasks = []
-            
-            for task_id, task in task_status.items():
-                # 清理超过指定时间的任务
-                if current_time - task.get("start_time", current_time) > TASK_EXPIRY:
-                    expired_tasks.append(task_id)
-            
-            for task_id in expired_tasks:
-                task_status.pop(task_id, None)
-            
-            await asyncio.sleep(CLEANUP_INTERVAL)  # 每小时清理一次
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"清理任务状态时出错: {str(e)}")
-            await asyncio.sleep(60)  # 发生错误时等待1分钟后重试
-
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时加载任务状态"""
-    global task_status
-    task_status = load_task_status()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时保存任务状态"""
-    save_task_status()
-
-async def periodic_save_task_status():
-    """定期保存任务状态到文件"""
-    while True:
-        try:
-            save_task_status()
-            await asyncio.sleep(60)  # 每分钟保存一次
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"保存任务状态时出错: {str(e)}")
-            await asyncio.sleep(10)  # 发生错误时等待10秒后重试
-
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """返回主页"""
@@ -120,41 +74,11 @@ async def not_found_handler(request: Request, exc: HTTPException):
         "index.html",
         {"request": request, "error": "页面未找到"},
         status_code=404
-    )
-
-async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
-    """后台处理数据的异步函数"""
-    try:
-        # 更新任务状态
-        await set_task_status(task_id, {
-            "status": "processing",
-            "progress": 10,
-            "message": "正在读取数据...",
-            "start_time": time.time()
-        })
-        
-        # 处理数据
-        result = await process_excel_async(order_data, schedule_data, task_id)
-        
-        # 将结果转换为base64
-        result_base64 = base64.b64encode(result).decode('utf-8')
-        
-        # 更新任务状态为完成
-        await set_task_status(task_id, {
-            "status": "completed",
-            "progress": 100,
-            "message": "处理完成",
-            "result": result_base64
-        })
-    except Exception as e:
-        # 更新任务状态为失败
-        await set_task_status(task_id, {
-            "status": "failed",
-            "message": str(e)
-        })
+    ) 
 
 @app.post("/api/process")
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
+    """处理文件上传"""
     try:
         print(f"开始处理文件上传...")
         print(f"订单文件名: {order_file.filename}")
@@ -287,6 +211,50 @@ async def get_task_status_endpoint(task_id: str):
                 "progress": 0
             }
         )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常处理器"""
+    error_msg = str(exc)
+    print(f"全局异常: {error_msg}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": error_msg,
+            "path": request.url.path
+        }
+    ) 
+
+async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
+    """后台处理数据的异步函数"""
+    try:
+        # 更新任务状态
+        await set_task_status(task_id, {
+            "status": "processing",
+            "progress": 10,
+            "message": "正在读取数据...",
+            "start_time": time.time()
+        })
+        
+        # 处理数据
+        result = await process_excel_async(order_data, schedule_data, task_id)
+        
+        # 将结果转换为base64
+        result_base64 = base64.b64encode(result).decode('utf-8')
+        
+        # 更新任务状态为完成
+        await set_task_status(task_id, {
+            "status": "completed",
+            "progress": 100,
+            "message": "处理完成",
+            "result": result_base64
+        })
+    except Exception as e:
+        # 更新任务状态为失败
+        await set_task_status(task_id, {
+            "status": "failed",
+            "message": str(e)
+        })
 
 async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: str):
     """异步处理 Excel 数据的核心逻辑"""
@@ -527,17 +495,4 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
     except Exception as e:
         error_msg = f"数据处理失败: {str(e)}"
         print(error_msg)  # 打印错误日志
-        raise Exception(error_msg)
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """全局异常处理器"""
-    error_msg = str(exc)
-    print(f"全局异常: {error_msg}")  # 打印错误日志
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": error_msg,
-            "path": request.url.path
-        }
-    ) 
+        raise Exception(error_msg) 
