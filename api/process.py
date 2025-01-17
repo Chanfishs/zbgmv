@@ -20,15 +20,35 @@ from urllib.parse import urlparse
 UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
 UPSTASH_REDIS_REST_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
 
+print("[DEBUG] ===== Redis 配置信息 =====")
+print(f"[DEBUG] UPSTASH_REDIS_REST_URL: {UPSTASH_REDIS_REST_URL}")
+print(f"[DEBUG] UPSTASH_REDIS_REST_TOKEN: {'***' + UPSTASH_REDIS_REST_TOKEN[-8:] if UPSTASH_REDIS_REST_TOKEN else 'None'}")
+
 # 构建 Redis URL
 if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
     # 从 REST URL 中提取主机名
     parsed_url = urlparse(UPSTASH_REDIS_REST_URL)
     host = parsed_url.netloc
+    if not host:
+        host = parsed_url.path.strip('/')
+    
+    print(f"[DEBUG] 解析的 URL 信息:")
+    print(f"[DEBUG] - scheme: {parsed_url.scheme}")
+    print(f"[DEBUG] - netloc: {parsed_url.netloc}")
+    print(f"[DEBUG] - path: {parsed_url.path}")
+    print(f"[DEBUG] - 提取的 host: {host}")
+    
+    # 确保添加端口号
+    if ':' not in host:
+        host = f"{host}:30865"
+    print(f"[DEBUG] 最终的 host（包含端口）: {host}")
+    
     # 构建标准的 Redis URL
     REDIS_URL = f"redis://default:{UPSTASH_REDIS_REST_TOKEN}@{host}"
+    print(f"[DEBUG] 构建的 REDIS_URL: redis://***@{host}")
 else:
     REDIS_URL = None
+    print("[ERROR] 缺少必要的环境变量配置")
 
 print(f"[DEBUG] Redis URL 配置: {REDIS_URL}")
 redis = None
