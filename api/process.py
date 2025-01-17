@@ -23,12 +23,10 @@ redis = None
 # 任务过期时间（秒）
 TASK_EXPIRY = 3600  # 1小时
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """处理应用程序的生命周期事件"""
+async def init_redis():
+    """初始化 Redis 连接"""
     global redis
     try:
-        # 启动时连接Redis
         if not REDIS_URL:
             print("[ERROR] REDIS_URL 环境变量未设置")
             raise Exception("REDIS_URL 环境变量未设置")
@@ -52,10 +50,21 @@ async def lifespan(app: FastAPI):
             raise Exception("Redis 连接测试失败")
         
         print("[DEBUG] Redis 连接测试成功")
-        yield
-        
+        return redis
     except Exception as e:
         print(f"[ERROR] Redis 连接失败: {str(e)}")
+        raise
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """处理应用程序的生命周期事件"""
+    try:
+        # 启动时连接Redis
+        global redis
+        redis = await init_redis()
+        yield
+    except Exception as e:
+        print(f"[ERROR] 应用程序启动失败: {str(e)}")
         raise
     finally:
         # 关闭时断开Redis连接
