@@ -131,7 +131,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
     try:
         print(f"[DEBUG] 开始处理文件上传...")
         print(f"[DEBUG] Redis 连接状态: {redis is not None}")
-        print(f"[DEBUG] Redis URL: {REDIS_URL}")
+        print(f"[DEBUG] Redis 配置: UPSTASH_REDIS_REST_URL 已设置: {bool(UPSTASH_REDIS_REST_URL)}")
         print(f"[DEBUG] 订单文件名: {order_file.filename}")
         print(f"[DEBUG] 排班表文件名: {schedule_file.filename}")
         
