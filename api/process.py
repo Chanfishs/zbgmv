@@ -57,27 +57,28 @@ async def init_redis():
         print(f"[ERROR] Redis 连接失败: {str(e)}")
         raise
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """处理应用程序的生命周期事件"""
+# 创建 FastAPI 应用实例
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    """应用程序启动时的事件处理"""
     global redis
     try:
-        # 启动时连接Redis
         redis = await init_redis()
         print("[DEBUG] 应用程序启动时 Redis 连接状态:", redis is not None)
-        yield
     except Exception as e:
         print(f"[ERROR] 应用程序启动失败: {str(e)}")
         raise
-    finally:
-        # 关闭时断开Redis连接
-        if redis:
-            print("[DEBUG] 正在关闭 Redis 连接")
-            await redis.close()
-            print("[DEBUG] Redis 连接已关闭")
 
-# 创建 FastAPI 应用实例，并确保使用 lifespan
-app = FastAPI(lifespan=lifespan)
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用程序关闭时的事件处理"""
+    global redis
+    if redis:
+        print("[DEBUG] 正在关闭 Redis 连接")
+        await redis.close()
+        print("[DEBUG] Redis 连接已关闭")
 
 # 配置静态文件
 app.mount("/static", StaticFiles(directory="api/static"), name="static")
