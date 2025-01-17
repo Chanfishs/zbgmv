@@ -26,9 +26,9 @@ TASK_EXPIRY = 3600  # 1小时
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """处理应用程序的生命周期事件"""
+    global redis
     try:
         # 启动时连接Redis
-        global redis
         if not REDIS_URL:
             print("[ERROR] REDIS_URL 环境变量未设置")
             raise Exception("REDIS_URL 环境变量未设置")
@@ -37,13 +37,23 @@ async def lifespan(app: FastAPI):
         redis = await aioredis.from_url(
             REDIS_URL,
             encoding="utf-8",
-            decode_responses=True,
-            socket_connect_timeout=30,
-            socket_keepalive=True,
-            retry_on_timeout=True
+            decode_responses=True
         )
         print("[DEBUG] Redis 连接成功")
+        
+        # 测试 Redis 连接
+        test_key = "test:init"
+        test_value = "connection_test"
+        await redis.set(test_key, test_value)
+        result = await redis.get(test_key)
+        await redis.delete(test_key)
+        
+        if result != test_value:
+            raise Exception("Redis 连接测试失败")
+        
+        print("[DEBUG] Redis 连接测试成功")
         yield
+        
     except Exception as e:
         print(f"[ERROR] Redis 连接失败: {str(e)}")
         raise
@@ -54,7 +64,8 @@ async def lifespan(app: FastAPI):
             await redis.close()
             print("[DEBUG] Redis 连接已关闭")
 
-app = FastAPI(title="Excel数据处理系统", lifespan=lifespan)
+# 创建 FastAPI 应用实例
+app = FastAPI(lifespan=lifespan)
 
 # 配置静态文件
 app.mount("/static", StaticFiles(directory="api/static"), name="static")
