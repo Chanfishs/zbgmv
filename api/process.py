@@ -25,6 +25,16 @@ required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选
                          '订单提交日期', '订单提交时间']
 required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
 
+# 任务状态常量
+TASK_STATUS_PENDING = "pending"
+TASK_STATUS_PROCESSING = "processing"
+TASK_STATUS_COMPLETED = "completed"
+TASK_STATUS_FAILED = "failed"
+TASK_STATUS_CANCELLED = "cancelled"
+
+# 存储正在运行的任务
+running_tasks = {}
+
 print("[DEBUG] ===== Redis 配置信息 =====")
 print(f"[DEBUG] UPSTASH_REDIS_REST_URL: {UPSTASH_REDIS_REST_URL}")
 print(f"[DEBUG] UPSTASH_REDIS_REST_TOKEN: {'***' + UPSTASH_REDIS_REST_TOKEN[-8:] if UPSTASH_REDIS_REST_TOKEN else 'None'}")
@@ -299,16 +309,58 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     ) 
 
+async def cancel_task(task_id: str):
+    """取消正在运行的任务"""
+    if task_id in running_tasks:
+        task = running_tasks[task_id]
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                print(f"[DEBUG] 任务 {task_id} 已取消")
+            finally:
+                del running_tasks[task_id]
+                await set_task_status(task_id, {
+                    "status": TASK_STATUS_CANCELLED,
+                    "message": "任务已取消",
+                    "progress": 0
+                })
+                return True
+    return False
+
+@app.post("/api/cancel/{task_id}")
+async def cancel_task_endpoint(task_id: str):
+    """终止任务的API端点"""
+    try:
+        if await cancel_task(task_id):
+            return JSONResponse(content={"message": "任务已终止"})
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "任务不存在或已完成"}
+            )
+    except Exception as e:
+        print(f"[ERROR] 终止任务失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"终止任务失败: {str(e)}"}
+        )
+
 async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
     """后台处理数据的异步函数"""
     try:
+        # 将任务添加到运行中的任务字典
+        task = asyncio.current_task()
+        running_tasks[task_id] = task
+        
         print(f"[DEBUG] 开始后台处理任务 {task_id}")
         print(f"[DEBUG] 订单数据大小: {len(order_data)} bytes")
         print(f"[DEBUG] 排班表数据大小: {len(schedule_data)} bytes")
         
         # 更新任务状态
         await set_task_status(task_id, {
-            "status": "processing",
+            "status": TASK_STATUS_PROCESSING,
             "progress": 10,
             "message": "正在读取数据...",
             "start_time": time.time()
@@ -326,12 +378,16 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
         
         # 更新任务状态为完成
         await set_task_status(task_id, {
-            "status": "completed",
+            "status": TASK_STATUS_COMPLETED,
             "progress": 100,
             "message": "处理完成",
             "result": result_base64
         })
         print(f"[DEBUG] 任务 {task_id} 处理完成")
+        
+    except asyncio.CancelledError:
+        print(f"[DEBUG] 任务 {task_id} 被取消")
+        raise
         
     except Exception as e:
         print(f"[ERROR] 后台任务处理失败: {str(e)}")
@@ -339,10 +395,15 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
         print(f"[ERROR] 错误详情: {str(e)}")
         # 更新任务状态为失败
         await set_task_status(task_id, {
-            "status": "failed",
+            "status": TASK_STATUS_FAILED,
             "message": str(e)
         })
         print(f"[DEBUG] 任务 {task_id} 已标记为失败")
+    
+    finally:
+        # 从运行中的任务字典中移除任务
+        if task_id in running_tasks:
+            del running_tasks[task_id]
 
 async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: str):
     """异步处理 Excel 数据的核心逻辑"""
