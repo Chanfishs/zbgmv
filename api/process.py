@@ -14,13 +14,14 @@ import os
 from datetime import datetime
 from upstash_redis import Redis
 import base64
+import traceback
 
 # Redis 连接配置
 UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
 UPSTASH_REDIS_REST_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
 
-# 必需的列名定义
-required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
+# 必需的列名定义（更新为实际的列名）
+required_order_columns = ['主订单编号', '子订单编号', '商品ID', '定制商品', '流量来源', 
                          '流量体裁', '取消原因', '订单状态', '订单应付金额', 
                          '订单提交日期', '订单提交时间']
 required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
@@ -434,12 +435,25 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             print(f"[DEBUG] - 实际列名: {list(df_header.columns)}")
             print(f"[DEBUG] - 期望列名: {required_order_columns}")
             print(f"[DEBUG] - 列名匹配检查:")
+            
+            # 检查列名是否存在，同时处理可能的空格和大小写问题
+            missing_columns = []
             for col in required_order_columns:
-                print(f"[DEBUG]   - {col}: {'存在' if col in df_header.columns else '不存在'}")
+                exists = any(existing_col.strip() == col.strip() for existing_col in df_header.columns)
+                print(f"[DEBUG]   - {col}: {'存在' if exists else '不存在'}")
+                if not exists:
+                    missing_columns.append(col)
+            
+            if missing_columns:
+                error_msg = f"订单数据缺少必要的列：{', '.join(missing_columns)}"
+                print(f"[ERROR] {error_msg}")
+                raise Exception(error_msg)
+                
         except Exception as e:
             print(f"[ERROR] 数据结构检查失败: {str(e)}")
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
             raise
-            
+
         # 第三步：系统资源监控
         print(f"[DEBUG] ===== 系统资源监控 =====")
         import psutil
@@ -519,7 +533,7 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
 
         # 验证必要的列是否存在
         print("[DEBUG] 开始验证数据列...")
-        required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
+        required_order_columns = ['主订单编号', '子订单编号', '商品ID', '定制商品', '流量来源', 
                                 '流量体裁', '取消原因', '订单状态', '订单应付金额', 
                                 '订单提交日期', '订单提交时间']
         required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
@@ -573,7 +587,7 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 initial_count = len(chunk)
                 
                 # 记录每个过滤步骤的结果
-                chunk_filtered = chunk[~chunk['选购商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
+                chunk_filtered = chunk[~chunk['定制商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
                 print(f"[DEBUG] 关键词过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
                 
                 chunk_filtered = chunk_filtered[~chunk_filtered['流量来源'].str.contains('精选联盟', na=False)]
