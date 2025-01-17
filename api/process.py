@@ -15,57 +15,91 @@ from datetime import datetime
 from redis import asyncio as aioredis
 import base64
 
-# Redis 连接
+# Redis 连接配置
 REDIS_URL = os.getenv('REDIS_URL')
-print(f"[DEBUG] 初始化时的 REDIS_URL: {REDIS_URL}")
-
-# 创建 Redis 连接
+print(f"[DEBUG] Redis URL 配置: {REDIS_URL}")
 redis = None
 
 # 任务过期时间（秒）
 TASK_EXPIRY = 3600  # 1小时
 
-async def init_redis():
-    """初始化 Redis 连接"""
+async def get_redis_connection():
+    """获取 Redis 连接，如果不存在或无效则初始化"""
     global redis
     try:
+        # 检查连接是否存在且有效
+        if redis:
+            try:
+                # 测试连接是否有效
+                await redis.ping()
+                return redis
+            except Exception as e:
+                print(f"[DEBUG] Redis 连接已失效，准备重新连接: {str(e)}")
+                if redis:
+                    await redis.close()
+                redis = None
+        
+        # 初始化新连接
         if not REDIS_URL:
             print("[ERROR] REDIS_URL 环境变量未设置")
             raise Exception("REDIS_URL 环境变量未设置")
             
-        print(f"[DEBUG] 正在连接 Redis: {REDIS_URL}")
+        print(f"[DEBUG] 正在建立新的 Redis 连接")
         redis = await aioredis.from_url(
             REDIS_URL,
             encoding="utf-8",
             decode_responses=True
         )
-        print("[DEBUG] Redis 连接成功")
         
-        # 测试 Redis 连接
-        test_key = "test:init"
-        test_value = "connection_test"
-        await redis.set(test_key, test_value)
-        result = await redis.get(test_key)
-        await redis.delete(test_key)
-        
-        if result != test_value:
-            raise Exception("Redis 连接测试失败")
-        
-        print("[DEBUG] Redis 连接测试成功")
+        # 测试新连接
+        await redis.ping()
+        print("[DEBUG] Redis 新连接建立成功")
         return redis
+        
     except Exception as e:
-        print(f"[ERROR] Redis 连接失败: {str(e)}")
+        print(f"[ERROR] Redis 连接获取失败: {str(e)}")
         raise
+
+async def get_task_status(task_id: str) -> dict:
+    """从Redis获取任务状态"""
+    try:
+        redis_conn = await get_redis_connection()
+        status = await redis_conn.get(f"task:{task_id}")
+        if status:
+            return json.loads(status)
+        return None
+    except Exception as e:
+        print(f"[ERROR] 获取任务状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取任务状态失败: {str(e)}")
+
+async def set_task_status(task_id: str, status: dict):
+    """设置任务状态到Redis"""
+    try:
+        redis_conn = await get_redis_connection()
+        await redis_conn.set(
+            f"task:{task_id}",
+            json.dumps(status),
+            ex=TASK_EXPIRY
+        )
+    except Exception as e:
+        print(f"[ERROR] 设置任务状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"设置任务状态失败: {str(e)}")
 
 # 创建 FastAPI 应用实例
 app = FastAPI()
+
+# 配置静态文件
+app.mount("/static", StaticFiles(directory="api/static"), name="static")
+
+# 配置模板
+templates = Jinja2Templates(directory="api/templates")
 
 @app.on_event("startup")
 async def startup_event():
     """应用程序启动时的事件处理"""
     global redis
     try:
-        redis = await init_redis()
+        redis = await get_redis_connection()
         print("[DEBUG] 应用程序启动时 Redis 连接状态:", redis is not None)
     except Exception as e:
         print(f"[ERROR] 应用程序启动失败: {str(e)}")
@@ -79,45 +113,6 @@ async def shutdown_event():
         print("[DEBUG] 正在关闭 Redis 连接")
         await redis.close()
         print("[DEBUG] Redis 连接已关闭")
-
-# 配置静态文件
-app.mount("/static", StaticFiles(directory="api/static"), name="static")
-
-# 配置模板
-templates = Jinja2Templates(directory="api/templates")
-
-async def get_task_status(task_id: str) -> dict:
-    """从Redis获取任务状态"""
-    global redis
-    if not redis:
-        print("[ERROR] Redis 未连接，尝试重新初始化...")
-        try:
-            redis = await init_redis()
-        except Exception as e:
-            print(f"[ERROR] Redis 重新初始化失败: {str(e)}")
-            raise HTTPException(status_code=500, detail="Redis未连接且重新初始化失败")
-    
-    status = await redis.get(f"task:{task_id}")
-    if status:
-        return json.loads(status)
-    return None
-
-async def set_task_status(task_id: str, status: dict):
-    """设置任务状态到Redis"""
-    global redis
-    if not redis:
-        print("[ERROR] Redis 未连接，尝试重新初始化...")
-        try:
-            redis = await init_redis()
-        except Exception as e:
-            print(f"[ERROR] Redis 重新初始化失败: {str(e)}")
-            raise HTTPException(status_code=500, detail="Redis未连接且重新初始化失败")
-    
-    await redis.set(
-        f"task:{task_id}",
-        json.dumps(status),
-        ex=TASK_EXPIRY  # 设置过期时间
-    )
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -580,28 +575,24 @@ async def test_redis_connection():
         print("[DEBUG] 开始测试 Redis 连接")
         print(f"[DEBUG] Redis URL: {REDIS_URL}")
         
-        if not redis:
-            print("[ERROR] Redis 客户端未初始化")
-            return JSONResponse(
-                status_code=500,
-                content={"status": "error", "message": "Redis 客户端未初始化"}
-            )
-            
+        # 获取或初始化 Redis 连接
+        redis_conn = await get_redis_connection()
+        
         # 测试基本操作
         test_key = "test:connection"
         test_value = f"test_{time.time()}"
         
         # 设置测试值
         print("[DEBUG] 尝试写入测试数据")
-        await redis.set(test_key, test_value, ex=60)
+        await redis_conn.set(test_key, test_value, ex=60)
         
         # 读取测试值
         print("[DEBUG] 尝试读取测试数据")
-        retrieved_value = await redis.get(test_key)
+        retrieved_value = await redis_conn.get(test_key)
         
         # 删除测试值
         print("[DEBUG] 尝试删除测试数据")
-        await redis.delete(test_key)
+        await redis_conn.delete(test_key)
         
         if retrieved_value == test_value:
             print("[DEBUG] Redis 连接测试成功")
