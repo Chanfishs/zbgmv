@@ -19,12 +19,18 @@ import sys
 import logging
 
 # 配置日志记录
+LOG_DIR = '/tmp' if os.environ.get('AWS_LAMBDA_FUNCTION_NAME') else '.'
+LOG_FILE = os.path.join(LOG_DIR, 'app.log')
+
+# 确保日志目录存在
+os.makedirs(LOG_DIR, exist_ok=True)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('app.log', encoding='utf-8')
+        logging.FileHandler(LOG_FILE, encoding='utf-8', mode='a')
     ]
 )
 logger = logging.getLogger(__name__)
