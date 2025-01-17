@@ -15,8 +15,15 @@ from datetime import datetime
 from upstash_redis import Redis
 import base64
 import traceback
-import psutil
 import sys
+
+# 尝试导入 psutil，如果不可用则跳过
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+    print("[WARNING] psutil 模块不可用，系统资源监控功能将被禁用")
 
 # Redis 连接配置
 UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -144,6 +151,29 @@ async def not_found_handler(request: Request, exc: HTTPException):
         status_code=404
     ) 
 
+async def monitor_system_resources():
+    """监控系统资源使用情况"""
+    if not HAS_PSUTIL:
+        return {
+            "status": "disabled",
+            "message": "系统资源监控功能未启用（psutil 模块不可用）"
+        }
+    
+    try:
+        process = psutil.Process(os.getpid())
+        return {
+            "status": "success",
+            "cpu_percent": psutil.cpu_percent(),
+            "memory_usage_mb": process.memory_info().rss / 1024 / 1024,
+            "memory_percent": psutil.virtual_memory().percent,
+            "disk_usage_percent": psutil.disk_usage('/').percent
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"监控系统资源失败: {str(e)}"
+        }
+
 @app.post("/api/process")
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     """处理文件上传"""
@@ -154,6 +184,17 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         print(f"[DEBUG] 订单文件名: {order_file.filename}")
         print(f"[DEBUG] 排班表文件名: {schedule_file.filename}")
         
+        # 监控系统资源
+        resources = await monitor_system_resources()
+        if resources["status"] == "success":
+            print(f"[DEBUG] 系统资源使用:")
+            print(f"[DEBUG] - CPU 使用率: {resources['cpu_percent']}%")
+            print(f"[DEBUG] - 内存使用: {resources['memory_usage_mb']:.2f} MB")
+            print(f"[DEBUG] - 系统内存使用率: {resources['memory_percent']}%")
+            print(f"[DEBUG] - 磁盘使用率: {resources['disk_usage_percent']}%")
+        else:
+            print(f"[DEBUG] 系统资源监控: {resources['message']}")
+
         # 验证文件扩展名
         if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
             print("[ERROR] 文件格式错误：非 .xlsx 格式")
