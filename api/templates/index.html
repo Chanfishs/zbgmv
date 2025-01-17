@@ -205,6 +205,11 @@
         let taskId = null;
         let progressCheckInterval = null;
 
+        // 获取 API 基础 URL
+        function getApiBaseUrl() {
+            return window.location.origin;
+        }
+
         // 文件选择处理
         function handleFileSelect(input, displayId) {
             const fileName = input.files[0]?.name || '拖拽文件到此处或点击上传';
@@ -218,6 +223,116 @@
             const scheduleFile = document.getElementById('scheduleFile').files[0];
             const submitBtn = document.getElementById('submitBtn');
             submitBtn.disabled = !(orderFile && scheduleFile);
+        }
+
+        // 表单提交处理
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('order_file', document.getElementById('orderFile').files[0]);
+            formData.append('schedule_file', document.getElementById('scheduleFile').files[0]);
+            
+            try {
+                // 显示进度条
+                document.getElementById('progressContainer').classList.remove('hidden');
+                document.getElementById('submitBtn').disabled = true;
+                
+                // 发送文件
+                const response = await fetch(`${getApiBaseUrl()}/api/process`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`上传失败: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                taskId = data.task_id;
+                
+                // 开始检查进度
+                startProgressCheck();
+                
+            } catch (error) {
+                console.error('上传错误:', error);
+                document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
+                document.getElementById('progressContainer').classList.add('hidden');
+                document.getElementById('submitBtn').disabled = false;
+            }
+        });
+
+        // 检查处理进度
+        async function checkProgress() {
+            if (!taskId) return;
+            
+            try {
+                const response = await fetch(`${getApiBaseUrl()}/api/status/${taskId}`);
+                if (!response.ok) {
+                    throw new Error(`获取状态失败: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // 更新进度条
+                const progressBar = document.getElementById('progressBar');
+                const progressText = document.getElementById('progressText');
+                const statusMessage = document.getElementById('statusMessage');
+                
+                progressBar.style.width = `${data.progress}%`;
+                progressText.textContent = `${data.progress}%`;
+                statusMessage.textContent = data.message;
+                
+                // 处理完成
+                if (data.status === 'completed') {
+                    clearInterval(progressCheckInterval);
+                    document.getElementById('submitBtn').disabled = false;
+                    
+                    // 显示下载链接
+                    const resultContainer = document.getElementById('resultContainer');
+                    const resultContent = document.getElementById('resultContent');
+                    resultContainer.classList.remove('hidden');
+                    
+                    // 创建下载链接
+                    const blob = new Blob([Uint8Array.from(atob(data.result), c => c.charCodeAt(0))], {
+                        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    });
+                    const url = URL.createObjectURL(blob);
+                    
+                    resultContent.innerHTML = `
+                        <div class="text-center">
+                            <p class="text-green-600 mb-4">✓ 处理完成</p>
+                            <a href="${url}" 
+                               download="processed_result.xlsx"
+                               class="inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                                下载结果文件
+                            </a>
+                        </div>
+                    `;
+                }
+                
+                // 处理失败
+                if (data.status === 'failed') {
+                    clearInterval(progressCheckInterval);
+                    document.getElementById('submitBtn').disabled = false;
+                    statusMessage.textContent = `处理失败: ${data.message}`;
+                    statusMessage.classList.add('error-message');
+                }
+                
+            } catch (error) {
+                console.error('检查进度错误:', error);
+                clearInterval(progressCheckInterval);
+                document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
+                document.getElementById('submitBtn').disabled = false;
+            }
+        }
+
+        // 开始定期检查进度
+        function startProgressCheck() {
+            if (progressCheckInterval) {
+                clearInterval(progressCheckInterval);
+            }
+            progressCheckInterval = setInterval(checkProgress, 1000);
         }
 
         // 拖放功能
@@ -246,169 +361,6 @@
                 }
             });
         });
-
-        // 表单提交处理
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const formData = new FormData();
-            const orderFile = document.getElementById('orderFile').files[0];
-            const scheduleFile = document.getElementById('scheduleFile').files[0];
-            
-            // 文件大小检查
-            const maxSize = 100 * 1024 * 1024; // 100MB
-            if (orderFile.size > maxSize || scheduleFile.size > maxSize) {
-                showError('文件大小超过限制（100MB）');
-                return;
-            }
-
-            formData.append('order_file', orderFile);
-            formData.append('schedule_file', scheduleFile);
-
-            try {
-                // 禁用提交按钮
-                const submitBtn = document.getElementById('submitBtn');
-                submitBtn.disabled = true;
-                submitBtn.textContent = '处理中...';
-
-                // 显示进度条
-                document.getElementById('progressContainer').classList.remove('hidden');
-                document.getElementById('resultContainer').classList.add('hidden');
-
-                // 发送请求
-                const response = await fetch('/api/process', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    throw new Error('上传失败');
-                }
-
-                const data = await response.json();
-                taskId = data.task_id;
-
-                // 开始检查进度
-                startProgressCheck();
-
-            } catch (error) {
-                showError(error.message);
-                resetForm();
-            }
-        });
-
-        // 显示结果
-        function showResult() {
-            const resultContainer = document.getElementById('resultContainer');
-            const resultContent = document.getElementById('resultContent');
-            
-            resultContainer.classList.remove('hidden');
-            resultContent.innerHTML = `
-                <div class="success-message">处理完成</div>
-                <div class="mt-4 text-center">
-                    <button onclick="downloadResult()" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-                        下载结果文件
-                    </button>
-                </div>
-            `;
-        }
-
-        // 下载结果文件
-        function downloadResult() {
-            const response = JSON.parse(sessionStorage.getItem('lastResult'));
-            if (!response || !response.result) {
-                showError('结果文件不存在');
-                return;
-            }
-
-            // 将 base64 转换为 Blob
-            const byteCharacters = atob(response.result);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-
-            // 创建下载链接
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = response.filename || 'processed_result.xlsx';
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        }
-
-        // 开始检查进度
-        function startProgressCheck() {
-            if (progressCheckInterval) {
-                clearInterval(progressCheckInterval);
-            }
-
-            progressCheckInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`/api/status/${taskId}`);
-                    const data = await response.json();
-
-                    updateProgress(data);
-
-                    if (data.status === 'completed' || data.status === 'failed') {
-                        clearInterval(progressCheckInterval);
-                        if (data.status === 'completed') {
-                            // 保存结果以供下载
-                            sessionStorage.setItem('lastResult', JSON.stringify(data));
-                            showResult();
-                        } else {
-                            showError(data.message);
-                        }
-                        resetForm();
-                    }
-                } catch (error) {
-                    clearInterval(progressCheckInterval);
-                    showError('检查进度失败');
-                    resetForm();
-                }
-            }, 1000);
-        }
-
-        // 更新进度显示
-        function updateProgress(data) {
-            const progressBar = document.getElementById('progressBar');
-            const progressText = document.getElementById('progressText');
-            const statusMessage = document.getElementById('statusMessage');
-
-            progressBar.style.width = `${data.progress || 0}%`;
-            progressText.textContent = `${data.progress || 0}%`;
-            statusMessage.textContent = data.message || '';
-        }
-
-        // 显示错误信息
-        function showError(message) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'error-message';
-            errorDiv.textContent = message;
-            
-            const form = document.getElementById('uploadForm');
-            form.insertBefore(errorDiv, form.firstChild);
-
-            setTimeout(() => {
-                errorDiv.remove();
-            }, 5000);
-        }
-
-        // 重置表单
-        function resetForm() {
-            const submitBtn = document.getElementById('submitBtn');
-            submitBtn.disabled = false;
-            submitBtn.textContent = '开始处理';
-            
-            document.getElementById('progressContainer').classList.add('hidden');
-            document.getElementById('progressBar').style.width = '0%';
-            document.getElementById('progressText').textContent = '0%';
-            document.getElementById('statusMessage').textContent = '';
-        }
     </script>
 </body>
 </html> 
