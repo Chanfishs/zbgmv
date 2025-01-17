@@ -455,13 +455,16 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
         raise
         
     except Exception as e:
-        print(f"[ERROR] 后台任务处理失败: {str(e)}")
+        error_msg = f"后台任务处理失败: {str(e)}"
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] {error_msg}")
         print(f"[ERROR] 错误类型: {type(e)}")
-        print(f"[ERROR] 错误详情: {str(e)}")
+        print(f"[ERROR] 错误堆栈: {error_trace}")
         # 更新任务状态为失败
         await set_task_status(task_id, {
             "status": TASK_STATUS_FAILED,
-            "message": str(e)
+            "message": error_msg,
+            "error_trace": error_trace
         })
         print(f"[DEBUG] 任务 {task_id} 已标记为失败")
     
