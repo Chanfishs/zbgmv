@@ -15,6 +15,8 @@ from datetime import datetime
 from upstash_redis import Redis
 import base64
 import traceback
+import psutil
+import sys
 
 # Redis 连接配置
 UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -197,6 +199,68 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
                 "start_time": time.time()
             })
             print("[DEBUG] 任务状态已初始化")
+            
+            # 第三步：系统资源监控
+            print(f"[DEBUG] ===== 系统资源监控 =====")
+            try:
+                print(f"[DEBUG] 系统资源使用:")
+                print(f"[DEBUG] - CPU 使用率: {psutil.cpu_percent()}%")
+                print(f"[DEBUG] - 内存使用: {psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024:.2f} MB")
+                print(f"[DEBUG] - 系统内存使用率: {psutil.virtual_memory().percent}%")
+                print(f"[DEBUG] - 磁盘使用率: {psutil.disk_usage('/').percent}%")
+            except Exception as e:
+                print(f"[WARNING] 系统资源监控失败: {str(e)}")
+            
+            # 第四步：异步任务和 Redis 状态检查
+            print(f"[DEBUG] ===== 异步任务和 Redis 状态检查 =====")
+            try:
+                print(f"[DEBUG] 异步任务信息:")
+                print(f"[DEBUG] - 事件循环运行状态: {asyncio.get_event_loop().is_running()}")
+                print(f"[DEBUG] - 当前任务数量: {len(asyncio.all_tasks())}")
+                
+                print(f"[DEBUG] Redis 连接状态:")
+                redis_client = get_redis_client()
+                test_key = "test:connection"
+                test_value = "test_value"
+                redis_client.set(test_key, test_value)
+                result = redis_client.get(test_key)
+                redis_client.delete(test_key)
+                print(f"[DEBUG] - Redis 连接测试: {'成功' if result == test_value else '失败'}")
+                print(f"[DEBUG] - 当前任务状态: {redis_client.get(f'task:{task_id}')}")
+            except Exception as e:
+                print(f"[WARNING] Redis 状态检查失败: {str(e)}")
+            
+            # 第五步：内存使用情况检查
+            print(f"[DEBUG] ===== 内存使用情况检查 =====")
+            try:
+                def get_size(obj, seen=None):
+                    """递归计算对象大小"""
+                    size = sys.getsizeof(obj)
+                    if seen is None:
+                        seen = set()
+                    obj_id = id(obj)
+                    if obj_id in seen:
+                        return 0
+                    seen.add(obj_id)
+                    if isinstance(obj, dict):
+                        size += sum([get_size(v, seen) for v in obj.values()])
+                        size += sum([get_size(k, seen) for k in obj.keys()])
+                    elif hasattr(obj, '__dict__'):
+                        size += get_size(obj.__dict__, seen)
+                    return size
+                
+                print(f"[DEBUG] 数据对象内存使用:")
+                print(f"[DEBUG] - 订单数据大小: {get_size(order_data) / 1024 / 1024:.2f} MB")
+                print(f"[DEBUG] - 排班表数据大小: {get_size(schedule_data) / 1024 / 1024:.2f} MB")
+            except Exception as e:
+                print(f"[WARNING] 内存使用情况检查失败: {str(e)}")
+            
+            # 更新状态：开始处理
+            await set_task_status(task_id, {
+                "status": TASK_STATUS_PROCESSING,
+                "progress": 20,
+                "message": "正在验证数据格式..."
+            })
             
             # 启动后台任务
             background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
@@ -450,72 +514,10 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 raise Exception(error_msg)
                 
         except Exception as e:
-            print(f"[ERROR] 数据结构检查失败: {str(e)}")
+            error_msg = f"数据结构检查失败: {str(e)}"
+            print(f"[ERROR] {error_msg}")
             print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
-            raise
-
-        # 第三步：系统资源监控
-        print(f"[DEBUG] ===== 系统资源监控 =====")
-        import psutil
-        import os
-        
-        process = psutil.Process(os.getpid())
-        print(f"[DEBUG] 系统资源使用:")
-        print(f"[DEBUG] - CPU 使用率: {psutil.cpu_percent()}%")
-        print(f"[DEBUG] - 内存使用: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-        print(f"[DEBUG] - 系统内存使用率: {psutil.virtual_memory().percent}%")
-        print(f"[DEBUG] - 磁盘使用率: {psutil.disk_usage('/').percent}%")
-        
-        # 第四步：异步任务和 Redis 状态检查
-        print(f"[DEBUG] ===== 异步任务和 Redis 状态检查 =====")
-        print(f"[DEBUG] 异步任务信息:")
-        print(f"[DEBUG] - 事件循环运行状态: {asyncio.get_event_loop().is_running()}")
-        print(f"[DEBUG] - 当前任务数量: {len(asyncio.all_tasks())}")
-        
-        print(f"[DEBUG] Redis 连接状态:")
-        try:
-            redis_client = get_redis_client()
-            test_key = "test:connection"
-            test_value = "test_value"
-            redis_client.set(test_key, test_value)
-            result = redis_client.get(test_key)
-            redis_client.delete(test_key)
-            print(f"[DEBUG] - Redis 连接测试: {'成功' if result == test_value else '失败'}")
-            print(f"[DEBUG] - 当前任务状态: {redis_client.get(f'task:{task_id}')}")
-        except Exception as e:
-            print(f"[ERROR] Redis 状态检查失败: {str(e)}")
-            raise
-            
-        # 第五步：内存使用情况检查
-        print(f"[DEBUG] ===== 内存使用情况检查 =====")
-        import sys
-        
-        def get_size(obj, seen=None):
-            """递归计算对象大小"""
-            size = sys.getsizeof(obj)
-            if seen is None:
-                seen = set()
-            obj_id = id(obj)
-            if obj_id in seen:
-                return 0
-            seen.add(obj_id)
-            if isinstance(obj, dict):
-                size += sum([get_size(v, seen) for v in obj.values()])
-                size += sum([get_size(k, seen) for k in obj.keys()])
-            elif hasattr(obj, '__dict__'):
-                size += get_size(obj.__dict__, seen)
-            return size
-        
-        print(f"[DEBUG] 数据对象内存使用:")
-        print(f"[DEBUG] - 订单数据大小: {get_size(order_data) / 1024 / 1024:.2f} MB")
-        print(f"[DEBUG] - 排班表数据大小: {get_size(schedule_data) / 1024 / 1024:.2f} MB")
-
-        # 更新状态：开始处理
-        await set_task_status(task_id, {
-            "status": "processing",
-            "progress": 20,
-            "message": "正在验证数据格式..."
-        })
+            raise Exception(error_msg)
 
         # 读取订单数据
         print("[DEBUG] 开始读取订单数据文件...")
@@ -524,35 +526,27 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             print(f"[DEBUG] 订单数据读取成功，共 {len(df)} 行")
             print(f"[DEBUG] 订单数据列名: {list(df.columns)}")
         except Exception as e:
-            print(f"[ERROR] 读取订单数据失败")
-            print(f"[ERROR] 错误类型: {type(e)}")
-            print(f"[ERROR] 错误信息: {str(e)}")
-            import traceback
+            error_msg = f"读取订单数据失败: {str(e)}"
+            print(f"[ERROR] {error_msg}")
             print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
-            raise Exception(f"读取订单数据失败: {str(e)}")
+            raise Exception(error_msg)
 
         # 验证必要的列是否存在
         print("[DEBUG] 开始验证数据列...")
-        required_order_columns = ['主订单编号', '子订单编号', '商品ID', '定制商品', '流量来源', 
-                                '流量体裁', '取消原因', '订单状态', '订单应付金额', 
-                                '订单提交日期', '订单提交时间']
-        required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
-
         try:
             # 验证订单数据列
             missing_columns = [col for col in required_order_columns if col not in df.columns]
             if missing_columns:
-                print(f"[ERROR] 订单数据缺少以下列: {missing_columns}")
+                error_msg = f"订单数据缺少必要的列：{', '.join(missing_columns)}"
+                print(f"[ERROR] {error_msg}")
                 print(f"[DEBUG] 当前可用列: {list(df.columns)}")
-                raise Exception(f"订单数据缺少必要的列：{', '.join(missing_columns)}")
+                raise Exception(error_msg)
             print("[DEBUG] 订单数据列验证通过")
         except Exception as e:
-            print(f"[ERROR] 验证订单数据列失败")
-            print(f"[ERROR] 错误类型: {type(e)}")
-            print(f"[ERROR] 错误信息: {str(e)}")
-            import traceback
+            error_msg = f"验证订单数据列失败: {str(e)}"
+            print(f"[ERROR] {error_msg}")
             print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
-            raise Exception(f"验证订单数据列失败: {str(e)}")
+            raise Exception(error_msg)
 
         # 更新进度
         print("[DEBUG] 开始处理订单数据...")
