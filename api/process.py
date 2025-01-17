@@ -30,7 +30,7 @@ UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
 UPSTASH_REDIS_REST_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
 
 # 必需的列名定义（更新为实际的列名）
-required_order_columns = ['主订单编号', '子订单编号', '商品ID', '定制商品', '流量来源', 
+required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
                          '流量体裁', '取消原因', '订单状态', '订单应付金额', 
                          '订单提交日期', '订单提交时间']
 required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
@@ -625,7 +625,7 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 initial_count = len(chunk)
                 
                 # 记录每个过滤步骤的结果
-                chunk_filtered = chunk[~chunk['定制商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
+                chunk_filtered = chunk[~chunk['选购商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
                 print(f"[DEBUG] 关键词过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
                 
                 chunk_filtered = chunk_filtered[~chunk_filtered['流量来源'].str.contains('精选联盟', na=False)]
