@@ -54,8 +54,8 @@ async def get_redis_connection():
         
         # 初始化新连接
         if not REDIS_URL:
-            print("[ERROR] REDIS_URL 环境变量未设置")
-            raise Exception("REDIS_URL 环境变量未设置")
+            print("[ERROR] Redis 配置未设置")
+            raise Exception("请检查 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN 环境变量")
             
         print(f"[DEBUG] 正在建立新的 Redis 连接")
         
