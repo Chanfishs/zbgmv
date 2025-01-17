@@ -16,7 +16,7 @@ from redis import asyncio as aioredis
 import base64
 
 # Redis 连接
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost')
+REDIS_URL = os.getenv('REDIS_URL', 'redis://default:AXiRASQgOWM3MjFlMWYtMGRhOS00ODUxLWIwYzktNWJmMGE0NzM2NTdhMmVmNTk4MjhkMGQ5NGZiY2JkN2UzZTMxMTEwMWZmMTg=@gusc1-eager-cheetah-30865.upstash.io:30865')
 redis = None
 
 # 任务过期时间（秒）
@@ -25,13 +25,29 @@ TASK_EXPIRY = 3600  # 1小时
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """处理应用程序的生命周期事件"""
-    # 启动时连接Redis
-    global redis
-    redis = await aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-    yield
-    # 关闭时断开Redis连接
-    if redis:
-        await redis.close()
+    try:
+        # 启动时连接Redis
+        global redis
+        print(f"[DEBUG] 正在连接 Redis: {REDIS_URL}")
+        redis = await aioredis.from_url(
+            REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=30,
+            socket_keepalive=True,
+            retry_on_timeout=True
+        )
+        print("[DEBUG] Redis 连接成功")
+        yield
+    except Exception as e:
+        print(f"[ERROR] Redis 连接失败: {str(e)}")
+        raise
+    finally:
+        # 关闭时断开Redis连接
+        if redis:
+            print("[DEBUG] 正在关闭 Redis 连接")
+            await redis.close()
+            print("[DEBUG] Redis 连接已关闭")
 
 app = FastAPI(title="Excel数据处理系统", lifespan=lifespan)
 
