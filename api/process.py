@@ -552,6 +552,11 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 if not exists:
                     missing_columns.append(col)
             
+            # 检查是否存在错误的列名"主订单状态编号"
+            if '主订单状态编号' in df_header.columns:
+                print("[DEBUG] 检测到错误的列名'主订单状态编号'，应该使用'主订单编号'")
+                df_header = df_header.rename(columns={'主订单状态编号': '主订单编号'})
+            
             if missing_columns:
                 error_msg = f"订单数据缺少必要的列：{', '.join(missing_columns)}"
                 print(f"[ERROR] {error_msg}")
@@ -571,10 +576,17 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             print(f"[DEBUG] 订单数据列名: {list(df.columns)}")
             
             # 添加列名映射
-            if '定制商品' in df.columns and '选购商品' not in df.columns:
-                print("[DEBUG] 检测到'定制商品'列，正在重命名为'选购商品'...")
-                df = df.rename(columns={'定制商品': '选购商品'})
-                print("[DEBUG] 列名重命名完成")
+            column_mappings = {
+                '主订单状态编号': '主订单编号',  # 修正错误的列名
+                '定制商品': '选购商品'  # 保持现有的映射
+            }
+            
+            # 应用所有需要的列名映射
+            for old_col, new_col in column_mappings.items():
+                if old_col in df.columns and new_col not in df.columns:
+                    print(f"[DEBUG] 检测到'{old_col}'列，正在重命名为'{new_col}'...")
+                    df = df.rename(columns={old_col: new_col})
+                    print(f"[DEBUG] 列名从'{old_col}'重命名为'{new_col}'完成")
             
         except Exception as e:
             error_msg = f"读取订单数据失败: {str(e)}"
@@ -627,10 +639,17 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 chunk[['主订单编号', '子订单编号', '商品ID']] = chunk[['主订单编号', '子订单编号', '商品ID']].astype(str)
                 
                 # 检查并映射列名
-                if '定制商品' in chunk.columns and '选购商品' not in chunk.columns:
-                    print("[DEBUG] 检测到'定制商品'列，正在重命名为'选购商品'...")
-                    chunk = chunk.rename(columns={'定制商品': '选购商品'})
-                    print("[DEBUG] 列名重命名完成")
+                column_mappings = {
+                    '主订单状态编号': '主订单编号',  # 修正错误的列名
+                    '定制商品': '选购商品'  # 保持现有的映射
+                }
+                
+                # 应用所有需要的列名映射
+                for old_col, new_col in column_mappings.items():
+                    if old_col in chunk.columns and new_col not in chunk.columns:
+                        print(f"[DEBUG] 检测到'{old_col}'列，正在重命名为'{new_col}'...")
+                        chunk = chunk.rename(columns={old_col: new_col})
+                        print(f"[DEBUG] 列名从'{old_col}'重命名为'{new_col}'完成")
                 
                 # 验证必要的列是否存在
                 if '选购商品' not in chunk.columns:
