@@ -341,6 +341,8 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
 async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: str):
     """异步处理 Excel 数据的核心逻辑"""
     try:
+        print(f"[DEBUG] ===== 开始处理任务 {task_id} =====")
+        
         # 更新状态：开始处理
         await set_task_status(task_id, {
             "status": "processing",
@@ -348,13 +350,22 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             "message": "正在验证数据格式..."
         })
 
+        # 读取订单数据
+        print("[DEBUG] 开始读取订单数据文件...")
         try:
-            # 读取订单数据
             df = pd.read_excel(BytesIO(order_data))
+            print(f"[DEBUG] 订单数据读取成功，共 {len(df)} 行")
+            print(f"[DEBUG] 订单数据列名: {list(df.columns)}")
         except Exception as e:
+            print(f"[ERROR] 读取订单数据失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
             raise Exception(f"读取订单数据失败: {str(e)}")
 
         # 验证必要的列是否存在
+        print("[DEBUG] 开始验证数据列...")
         required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
                                 '流量体裁', '取消原因', '订单状态', '订单应付金额', 
                                 '订单提交日期', '订单提交时间']
@@ -364,11 +375,20 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             # 验证订单数据列
             missing_columns = [col for col in required_order_columns if col not in df.columns]
             if missing_columns:
+                print(f"[ERROR] 订单数据缺少以下列: {missing_columns}")
+                print(f"[DEBUG] 当前可用列: {list(df.columns)}")
                 raise Exception(f"订单数据缺少必要的列：{', '.join(missing_columns)}")
+            print("[DEBUG] 订单数据列验证通过")
         except Exception as e:
+            print(f"[ERROR] 验证订单数据列失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
             raise Exception(f"验证订单数据列失败: {str(e)}")
 
         # 更新进度
+        print("[DEBUG] 开始处理订单数据...")
         await set_task_status(task_id, {
             "status": "processing",
             "progress": 40,
@@ -380,46 +400,73 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         total_chunks = len(df) // chunk_size + 1
         df_filtered_list = []
         
+        print(f"[DEBUG] 开始分块处理数据，共 {total_chunks} 个块")
         for i in range(total_chunks):
-            start_idx = i * chunk_size
-            end_idx = min((i + 1) * chunk_size, len(df))
-            chunk = df.iloc[start_idx:end_idx].copy()
-            
-            # 转为字符串以防后续合并或过滤问题
-            chunk[['主订单编号', '子订单编号', '商品ID']] = chunk[['主订单编号', '子订单编号', '商品ID']].astype(str)
-            
-            # 应用过滤条件
-            keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
-            chunk_filtered = chunk[~chunk['选购商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
-            chunk_filtered = chunk_filtered[~chunk_filtered['流量来源'].str.contains('精选联盟', na=False)]
-            
-            # 根据"流量体裁"筛选
-            mask_1 = (chunk_filtered['流量体裁'] == '其他') & (chunk_filtered['订单应付金额'] != 0)
-            mask_2 = chunk_filtered['流量体裁'] == '直播'
-            mask_3 = chunk_filtered['流量体裁'] == '数据将于第二天更新'
-            chunk_filtered = chunk_filtered[mask_1 | mask_2 | mask_3]
-            
-            # 筛选"取消原因"列为空
-            chunk_filtered = chunk_filtered[chunk_filtered['取消原因'].isna()]
-            
-            df_filtered_list.append(chunk_filtered)
-            
-            # 更新进度
-            progress = 40 + (i + 1) * 20 // total_chunks
-            await set_task_status(task_id, {
-                "status": "processing",
-                "progress": progress,
-                "message": f"正在处理订单数据... ({i + 1}/{total_chunks})"
-            })
+            try:
+                start_idx = i * chunk_size
+                end_idx = min((i + 1) * chunk_size, len(df))
+                print(f"[DEBUG] 处理第 {i+1}/{total_chunks} 块，行范围: {start_idx}-{end_idx}")
+                
+                chunk = df.iloc[start_idx:end_idx].copy()
+                print(f"[DEBUG] 当前块大小: {len(chunk)} 行")
+                
+                # 数据类型转换
+                print("[DEBUG] 转换数据类型...")
+                chunk[['主订单编号', '子订单编号', '商品ID']] = chunk[['主订单编号', '子订单编号', '商品ID']].astype(str)
+                
+                # 应用过滤条件
+                print("[DEBUG] 应用过滤条件...")
+                keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
+                initial_count = len(chunk)
+                
+                # 记录每个过滤步骤的结果
+                chunk_filtered = chunk[~chunk['选购商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
+                print(f"[DEBUG] 关键词过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
+                
+                chunk_filtered = chunk_filtered[~chunk_filtered['流量来源'].str.contains('精选联盟', na=False)]
+                print(f"[DEBUG] 流量来源过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
+                
+                # 根据"流量体裁"筛选
+                mask_1 = (chunk_filtered['流量体裁'] == '其他') & (chunk_filtered['订单应付金额'] != 0)
+                mask_2 = chunk_filtered['流量体裁'] == '直播'
+                mask_3 = chunk_filtered['流量体裁'] == '数据将于第二天更新'
+                chunk_filtered = chunk_filtered[mask_1 | mask_2 | mask_3]
+                print(f"[DEBUG] 流量体裁过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
+                
+                # 筛选"取消原因"列为空
+                chunk_filtered = chunk_filtered[chunk_filtered['取消原因'].isna()]
+                print(f"[DEBUG] 取消原因过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
+                
+                df_filtered_list.append(chunk_filtered)
+                
+                # 更新进度
+                progress = 40 + (i + 1) * 20 // total_chunks
+                await set_task_status(task_id, {
+                    "status": "processing",
+                    "progress": progress,
+                    "message": f"正在处理订单数据... ({i + 1}/{total_chunks})"
+                })
+                
+            except Exception as e:
+                print(f"[ERROR] 处理数据块 {i+1}/{total_chunks} 时失败")
+                print(f"[ERROR] 错误类型: {type(e)}")
+                print(f"[ERROR] 错误信息: {str(e)}")
+                import traceback
+                print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
+                raise Exception(f"处理数据块失败: {str(e)}")
             
             await asyncio.sleep(0)
 
+        print("[DEBUG] 合并过滤后的数据...")
         df_filtered = pd.concat(df_filtered_list, ignore_index=True)
+        print(f"[DEBUG] 过滤后的总数据量: {len(df_filtered)} 行")
         
         if df_filtered.empty:
+            print("[ERROR] 过滤后数据为空")
             raise Exception("过滤后没有任何数据，请检查过滤条件是否过于严格或数据是否符合要求")
 
         # 更新进度
+        print("[DEBUG] 开始处理排班表...")
         await set_task_status(task_id, {
             "status": "processing",
             "progress": 60,
@@ -428,20 +475,38 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
 
         # ========== 第 2 步：读取并验证排班表 ==========
         try:
+            print("[DEBUG] 开始读取排班表文件...")
             # 读取排班表
             df_schedule = pd.read_excel(BytesIO(schedule_data))
+            print(f"[DEBUG] 排班表读取成功，共 {len(df_schedule)} 行")
+            print(f"[DEBUG] 排班表列名: {list(df_schedule.columns)}")
         except Exception as e:
+            print(f"[ERROR] 读取排班表失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
             raise Exception(f"读取排班表失败: {str(e)}")
 
         try:
+            print("[DEBUG] 验证排班表必要列...")
             # 验证排班表列
             missing_columns = [col for col in required_schedule_columns if col not in df_schedule.columns]
             if missing_columns:
+                print(f"[ERROR] 排班表缺少以下列: {missing_columns}")
+                print(f"[DEBUG] 当前可用列: {list(df_schedule.columns)}")
                 raise Exception(f"排班表缺少必要的列：{', '.join(missing_columns)}")
+            print("[DEBUG] 排班表列验证通过")
         except Exception as e:
+            print(f"[ERROR] 验证排班表列失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
             raise Exception(f"验证排班表列失败: {str(e)}")
 
         # 更新进度
+        print("[DEBUG] 开始处理日期时间数据...")
         await set_task_status(task_id, {
             "status": "processing",
             "progress": 70,
@@ -449,42 +514,71 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         })
 
         # ========== 第 3 步：统一转换日期/时间类型 ==========
-        # 处理日期时间转换
+        print("[DEBUG] 开始转换日期时间格式...")
         try:
+            print("[DEBUG] 转换订单提交日期...")
             df_filtered['订单提交日期'] = pd.to_datetime(df_filtered['订单提交日期'], errors='coerce').dt.date
+            print("[DEBUG] 转换排班表日期...")
             df_schedule['日期'] = pd.to_datetime(df_schedule['日期'], errors='coerce').dt.date
         except Exception as e:
+            print(f"[ERROR] 日期转换失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
             raise Exception(f"日期转换失败: {str(e)}")
         
+        print("[DEBUG] 开始转换时间格式...")
         for df, time_cols in [
             (df_filtered, ['订单提交时间']),
             (df_schedule, ['上播时间', '下播时间'])
         ]:
             for col in time_cols:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(
-                        df[col].astype(str).str.strip(),
-                        format='%H:%M:%S',
-                        errors='coerce'
-                    ).dt.time
+                try:
+                    print(f"[DEBUG] 转换 {col}...")
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(
+                            df[col].astype(str).str.strip(),
+                            format='%H:%M:%S',
+                            errors='coerce'
+                        ).dt.time
+                        print(f"[DEBUG] {col} 转换完成")
+                except Exception as e:
+                    print(f"[ERROR] 转换 {col} 失败")
+                    print(f"[ERROR] 错误类型: {type(e)}")
+                    print(f"[ERROR] 错误信息: {str(e)}")
+                    import traceback
+                    print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
+                    raise Exception(f"时间转换失败: {str(e)}")
 
         # 检查日期时间转换后的空值
+        print("[DEBUG] 检查日期时间转换结果...")
         date_time_errors = []
         if df_filtered['订单提交日期'].isna().any():
             date_time_errors.append("订单数据中存在无效的日期格式")
+            print(f"[ERROR] 订单提交日期存在无效值，数量: {df_filtered['订单提交日期'].isna().sum()}")
         if df_filtered['订单提交时间'].isna().any():
             date_time_errors.append("订单数据中存在无效的时间格式")
+            print(f"[ERROR] 订单提交时间存在无效值，数量: {df_filtered['订单提交时间'].isna().sum()}")
         if df_schedule['日期'].isna().any():
             date_time_errors.append("排班表中存在无效的日期格式")
+            print(f"[ERROR] 排班表日期存在无效值，数量: {df_schedule['日期'].isna().sum()}")
         if df_schedule['上播时间'].isna().any():
             date_time_errors.append("排班表中存在无效的上播时间格式")
+            print(f"[ERROR] 上播时间存在无效值，数量: {df_schedule['上播时间'].isna().sum()}")
         if df_schedule['下播时间'].isna().any():
             date_time_errors.append("排班表中存在无效的下播时间格式")
+            print(f"[ERROR] 下播时间存在无效值，数量: {df_schedule['下播时间'].isna().sum()}")
 
         if date_time_errors:
-            raise Exception("日期时间格式错误：" + "；".join(date_time_errors))
+            error_msg = "日期时间格式错误：" + "；".join(date_time_errors)
+            print(f"[ERROR] {error_msg}")
+            raise Exception(error_msg)
+        
+        print("[DEBUG] 日期时间数据验证通过")
 
         # 更新进度
+        print("[DEBUG] 开始计算统计数据...")
         await set_task_status(task_id, {
             "status": "processing",
             "progress": 80,
@@ -492,52 +586,88 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         })
 
         # ========== 第 4 步：匹配并统计"订单应付金额" ==========
+        print("[DEBUG] 初始化统计字段...")
         df_schedule['GMV'] = 0.0
         df_schedule['退货GMV'] = 0.0
         df_schedule['GSV'] = 0.0
 
         # 按日期分组处理，减少内存使用
-        for date in df_schedule['日期'].unique():
-            schedule_mask = df_schedule['日期'] == date
-            order_mask = df_filtered['订单提交日期'] == date
-            
-            schedule_day = df_schedule[schedule_mask]
-            orders_day = df_filtered[order_mask]
-            
-            if orders_day.empty:
-                continue
+        unique_dates = df_schedule['日期'].unique()
+        print(f"[DEBUG] 开始处理 {len(unique_dates)} 个不同日期的数据")
+        
+        for date in unique_dates:
+            try:
+                print(f"[DEBUG] 处理日期: {date}")
+                schedule_mask = df_schedule['日期'] == date
+                order_mask = df_filtered['订单提交日期'] == date
                 
-            for i, row in schedule_day.iterrows():
-                start_time = row['上播时间']
-                end_time = row['下播时间']
+                schedule_day = df_schedule[schedule_mask]
+                orders_day = df_filtered[order_mask]
                 
-                if pd.isna(start_time) or pd.isna(end_time):
+                print(f"[DEBUG] 当日排班数: {len(schedule_day)}, 订单数: {len(orders_day)}")
+                
+                if orders_day.empty:
+                    print(f"[DEBUG] 日期 {date} 没有订单数据，跳过")
                     continue
+                    
+                for i, row in schedule_day.iterrows():
+                    try:
+                        start_time = row['上播时间']
+                        end_time = row['下播时间']
+                        
+                        if pd.isna(start_time) or pd.isna(end_time):
+                            print(f"[WARNING] 跳过无效时间段: 上播时间={start_time}, 下播时间={end_time}")
+                            continue
+                        
+                        print(f"[DEBUG] 处理时段: {start_time} - {end_time}")
+                        
+                        mask_time = (
+                            (orders_day['订单提交时间'] >= start_time) &
+                            (orders_day['订单提交时间'] <= end_time)
+                        )
+                        
+                        # GMV
+                        mask_status_GMV = orders_day['订单状态'].isin(['已发货', '已完成', '已关闭', '待发货'])
+                        matched_df_GMV = orders_day[mask_time & mask_status_GMV]
+                        gmv_value = matched_df_GMV['订单应付金额'].sum()
+                        df_schedule.at[i, 'GMV'] = gmv_value
+                        print(f"[DEBUG] GMV计算结果: {gmv_value}")
+                        
+                        # 退货GMV
+                        mask_status_refund = (orders_day['订单状态'] == '已关闭')
+                        matched_df_refund = orders_day[mask_time & mask_status_refund]
+                        refund_value = matched_df_refund['订单应付金额'].sum()
+                        df_schedule.at[i, '退货GMV'] = refund_value
+                        print(f"[DEBUG] 退货GMV计算结果: {refund_value}")
+                        
+                        # GSV
+                        mask_status_GSV = orders_day['订单状态'].isin(['已发货', '已完成', '待发货'])
+                        matched_df_GSV = orders_day[mask_time & mask_status_GSV]
+                        gsv_value = matched_df_GSV['订单应付金额'].sum()
+                        df_schedule.at[i, 'GSV'] = gsv_value
+                        print(f"[DEBUG] GSV计算结果: {gsv_value}")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] 处理时段数据失败")
+                        print(f"[ERROR] 错误类型: {type(e)}")
+                        print(f"[ERROR] 错误信息: {str(e)}")
+                        import traceback
+                        print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
+                        raise Exception(f"处理时段数据失败: {str(e)}")
                 
-                mask_time = (
-                    (orders_day['订单提交时间'] >= start_time) &
-                    (orders_day['订单提交时间'] <= end_time)
-                )
-                
-                # GMV
-                mask_status_GMV = orders_day['订单状态'].isin(['已发货', '已完成', '已关闭', '待发货'])
-                matched_df_GMV = orders_day[mask_time & mask_status_GMV]
-                df_schedule.at[i, 'GMV'] = matched_df_GMV['订单应付金额'].sum()
-                
-                # 退货GMV
-                mask_status_refund = (orders_day['订单状态'] == '已关闭')
-                matched_df_refund = orders_day[mask_time & mask_status_refund]
-                df_schedule.at[i, '退货GMV'] = matched_df_refund['订单应付金额'].sum()
-                
-                # GSV
-                mask_status_GSV = orders_day['订单状态'].isin(['已发货', '已完成', '待发货'])
-                matched_df_GSV = orders_day[mask_time & mask_status_GSV]
-                df_schedule.at[i, 'GSV'] = matched_df_GSV['订单应付金额'].sum()
+            except Exception as e:
+                print(f"[ERROR] 处理日期 {date} 失败")
+                print(f"[ERROR] 错误类型: {type(e)}")
+                print(f"[ERROR] 错误信息: {str(e)}")
+                import traceback
+                print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
+                raise Exception(f"处理日期 {date} 失败: {str(e)}")
             
             # 让出控制权
             await asyncio.sleep(0)
 
         # 更新进度
+        print("[DEBUG] 开始生成汇总报表...")
         await set_task_status(task_id, {
             "status": "processing",
             "progress": 90,
@@ -545,38 +675,74 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         })
 
         # ========== 第 5-6 步：汇总统计 ==========
+        print("[DEBUG] 开始计算汇总统计...")
         cols_to_sum = ['GMV', '退货GMV', 'GSV', '时段消耗']
         
-        # 主播汇总
-        if '主播姓名' in df_schedule.columns:
-            df_anchor_sum = df_schedule.groupby('主播姓名', as_index=False)[cols_to_sum].sum()
-            df_anchor_sum.columns = ['主播姓名', '主播GMV总和', '主播退货GMV总和', '主播GSV总和', '总消耗']
-        else:
-            df_anchor_sum = pd.DataFrame()
-            
-        # 场控汇总
-        if '场控姓名' in df_schedule.columns:
-            df_ck_sum = df_schedule.groupby('场控姓名', as_index=False)[cols_to_sum].sum()
-            df_ck_sum.columns = ['场控姓名', '场控GMV总和', '场控退货GMV总和', '场控GSV总和', '总消耗']
-        else:
-            df_ck_sum = pd.DataFrame()
+        try:
+            # 主播汇总
+            print("[DEBUG] 计算主播汇总...")
+            if '主播姓名' in df_schedule.columns:
+                df_anchor_sum = df_schedule.groupby('主播姓名', as_index=False)[cols_to_sum].sum()
+                df_anchor_sum.columns = ['主播姓名', '主播GMV总和', '主播退货GMV总和', '主播GSV总和', '总消耗']
+                print(f"[DEBUG] 主播汇总完成，共 {len(df_anchor_sum)} 条记录")
+            else:
+                print("[WARNING] 未找到主播姓名列，跳过主播汇总")
+                df_anchor_sum = pd.DataFrame()
+                
+            # 场控汇总
+            print("[DEBUG] 计算场控汇总...")
+            if '场控姓名' in df_schedule.columns:
+                df_ck_sum = df_schedule.groupby('场控姓名', as_index=False)[cols_to_sum].sum()
+                df_ck_sum.columns = ['场控姓名', '场控GMV总和', '场控退货GMV总和', '场控GSV总和', '总消耗']
+                print(f"[DEBUG] 场控汇总完成，共 {len(df_ck_sum)} 条记录")
+            else:
+                print("[WARNING] 未找到场控姓名列，跳过场控汇总")
+                df_ck_sum = pd.DataFrame()
+
+        except Exception as e:
+            print(f"[ERROR] 计算汇总统计失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
+            raise Exception(f"计算汇总统计失败: {str(e)}")
 
         # ========== 第 7 步：写入结果 ==========
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_filtered.to_excel(writer, sheet_name='主播、场控业绩筛选源表', index=False)
-            df_schedule.to_excel(writer, sheet_name='主播、场控排班', index=False)
-            if not df_anchor_sum.empty:
-                df_anchor_sum.to_excel(writer, sheet_name='主播月总业绩汇总', index=False)
-            if not df_ck_sum.empty:
-                df_ck_sum.to_excel(writer, sheet_name='场控月总业绩汇总', index=False)
+        print("[DEBUG] 开始生成结果文件...")
+        try:
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                print("[DEBUG] 写入主播、场控业绩筛选源表...")
+                df_filtered.to_excel(writer, sheet_name='主播、场控业绩筛选源表', index=False)
+                
+                print("[DEBUG] 写入主播、场控排班表...")
+                df_schedule.to_excel(writer, sheet_name='主播、场控排班', index=False)
+                
+                if not df_anchor_sum.empty:
+                    print("[DEBUG] 写入主播月总业绩汇总...")
+                    df_anchor_sum.to_excel(writer, sheet_name='主播月总业绩汇总', index=False)
+                    
+                if not df_ck_sum.empty:
+                    print("[DEBUG] 写入场控月总业绩汇总...")
+                    df_ck_sum.to_excel(writer, sheet_name='场控月总业绩汇总', index=False)
 
-        output.seek(0)
-        return output.getvalue()
+            output.seek(0)
+            print("[DEBUG] 结果文件生成完成")
+            return output.getvalue()
+
+        except Exception as e:
+            print(f"[ERROR] 生成结果文件失败")
+            print(f"[ERROR] 错误类型: {type(e)}")
+            print(f"[ERROR] 错误信息: {str(e)}")
+            import traceback
+            print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
+            raise Exception(f"生成结果文件失败: {str(e)}")
 
     except Exception as e:
         error_msg = f"数据处理失败: {str(e)}"
-        print(error_msg)  # 打印错误日志
+        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] 错误类型: {type(e)}")
+        print(f"[ERROR] 错误堆栈: {traceback.format_exc()}")
         raise Exception(error_msg) 
 
 @app.get("/api/test-redis")
