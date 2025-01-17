@@ -12,9 +12,8 @@ import time
 import json
 import os
 from datetime import datetime
-from redis import asyncio as aioredis
+from upstash_redis import Redis
 import base64
-from urllib.parse import urlparse
 
 # Redis 连接配置
 UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -24,103 +23,45 @@ print("[DEBUG] ===== Redis 配置信息 =====")
 print(f"[DEBUG] UPSTASH_REDIS_REST_URL: {UPSTASH_REDIS_REST_URL}")
 print(f"[DEBUG] UPSTASH_REDIS_REST_TOKEN: {'***' + UPSTASH_REDIS_REST_TOKEN[-8:] if UPSTASH_REDIS_REST_TOKEN else 'None'}")
 
-# 构建 Redis URL
-if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
-    # 从 REST URL 中提取主机名
-    parsed_url = urlparse(UPSTASH_REDIS_REST_URL)
-    host = parsed_url.netloc
-    if not host:
-        host = parsed_url.path.strip('/')
-    
-    print(f"[DEBUG] 解析的 URL 信息:")
-    print(f"[DEBUG] - scheme: {parsed_url.scheme}")
-    print(f"[DEBUG] - netloc: {parsed_url.netloc}")
-    print(f"[DEBUG] - path: {parsed_url.path}")
-    print(f"[DEBUG] - 提取的 host: {host}")
-    
-    # 确保添加端口号
-    if ':' not in host:
-        host = f"{host}:30865"
-    print(f"[DEBUG] 最终的 host（包含端口）: {host}")
-    
-    # 构建标准的 Redis URL
-    REDIS_URL = f"redis://default:{UPSTASH_REDIS_REST_TOKEN}@{host}"
-    print(f"[DEBUG] 构建的 REDIS_URL: redis://***@{host}")
-else:
-    REDIS_URL = None
-    print("[ERROR] 缺少必要的环境变量配置")
-
-print(f"[DEBUG] Redis URL 配置: {REDIS_URL}")
+# 创建 Redis 客户端
 redis = None
 
 # 任务过期时间（秒）
 TASK_EXPIRY = 3600  # 1小时
 
-async def get_redis_connection():
-    """获取 Redis 连接，如果不存在或无效则初始化"""
+def get_redis_client():
+    """获取 Redis 客户端实例"""
     global redis
     try:
-        # 检查连接是否存在且有效
-        if redis:
-            try:
-                # 测试连接是否有效
-                await redis.ping()
-                return redis
-            except Exception as e:
-                print(f"[DEBUG] Redis 连接已失效，准备重新连接: {str(e)}")
-                if redis:
-                    await redis.close()
-                redis = None
-        
-        # 初始化新连接
-        if not REDIS_URL:
-            print("[ERROR] Redis 配置未设置")
-            raise Exception("请检查 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN 环境变量")
+        if not redis:
+            if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
+                print("[ERROR] Redis 配置未设置")
+                raise Exception("请检查 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN 环境变量")
             
-        print(f"[DEBUG] 正在建立新的 Redis 连接")
-        
-        # 添加重试逻辑
-        max_retries = 3
-        retry_delay = 1  # 秒
-        
-        for attempt in range(max_retries):
-            try:
-                redis = await aioredis.from_url(
-                    REDIS_URL,
-                    encoding="utf-8",
-                    decode_responses=True,
-                    socket_connect_timeout=30,
-                    socket_keepalive=True,
-                    retry_on_timeout=True,
-                    health_check_interval=30,
-                    max_connections=10
-                )
-                
-                # 测试新连接
-                await redis.ping()
-                print(f"[DEBUG] Redis 新连接建立成功 (尝试 {attempt + 1}/{max_retries})")
-                return redis
-                
-            except Exception as e:
-                print(f"[DEBUG] 连接尝试 {attempt + 1}/{max_retries} 失败: {str(e)}")
-                if redis:
-                    await redis.close()
-                    redis = None
-                if attempt < max_retries - 1:
-                    print(f"[DEBUG] 等待 {retry_delay} 秒后重试...")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    raise Exception(f"在 {max_retries} 次尝试后仍无法建立连接")
-        
+            print("[DEBUG] 正在初始化 Redis 客户端")
+            redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
+            
+            # 测试连接
+            test_key = "test:init"
+            test_value = "connection_test"
+            redis.set(test_key, test_value)
+            result = redis.get(test_key)
+            redis.delete(test_key)
+            
+            if result != test_value:
+                raise Exception("Redis 连接测试失败")
+            
+            print("[DEBUG] Redis 客户端初始化成功")
+        return redis
     except Exception as e:
-        print(f"[ERROR] Redis 连接获取失败: {str(e)}")
+        print(f"[ERROR] Redis 客户端初始化失败: {str(e)}")
         raise
 
 async def get_task_status(task_id: str) -> dict:
     """从Redis获取任务状态"""
     try:
-        redis_conn = await get_redis_connection()
-        status = await redis_conn.get(f"task:{task_id}")
+        redis_client = get_redis_client()
+        status = redis_client.get(f"task:{task_id}")
         if status:
             return json.loads(status)
         return None
@@ -131,11 +72,11 @@ async def get_task_status(task_id: str) -> dict:
 async def set_task_status(task_id: str, status: dict):
     """设置任务状态到Redis"""
     try:
-        redis_conn = await get_redis_connection()
-        await redis_conn.set(
+        redis_client = get_redis_client()
+        redis_client.setex(
             f"task:{task_id}",
-            json.dumps(status),
-            ex=TASK_EXPIRY
+            TASK_EXPIRY,
+            json.dumps(status)
         )
     except Exception as e:
         print(f"[ERROR] 设置任务状态失败: {str(e)}")
@@ -626,36 +567,31 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
 
 @app.get("/api/test-redis")
 async def test_redis_connection():
-    """测试 Redis 连接状态"""
+    """测试 Redis 连接"""
     try:
-        print("[DEBUG] 开始测试 Redis 连接")
-        print(f"[DEBUG] Redis URL: {REDIS_URL}")
-        
-        # 获取或初始化 Redis 连接
-        redis_conn = await get_redis_connection()
+        redis_client = get_redis_client()
         
         # 测试基本操作
         test_key = "test:connection"
-        test_value = f"test_{time.time()}"
+        test_value = "test_value"
         
-        # 设置测试值
-        print("[DEBUG] 尝试写入测试数据")
-        await redis_conn.set(test_key, test_value, ex=60)
+        # 写入测试
+        redis_client.set(test_key, test_value)
+        print("[DEBUG] Redis 写入测试成功")
         
-        # 读取测试值
-        print("[DEBUG] 尝试读取测试数据")
-        retrieved_value = await redis_conn.get(test_key)
+        # 读取测试
+        result = redis_client.get(test_key)
+        print(f"[DEBUG] Redis 读取测试结果: {result}")
         
-        # 删除测试值
-        print("[DEBUG] 尝试删除测试数据")
-        await redis_conn.delete(test_key)
+        # 删除测试
+        redis_client.delete(test_key)
+        print("[DEBUG] Redis 删除测试成功")
         
-        if retrieved_value == test_value:
-            print("[DEBUG] Redis 连接测试成功")
+        if result == test_value:
             return JSONResponse(
                 content={
                     "status": "success",
-                    "message": "Redis 连接正常",
+                    "message": "Redis 连接测试成功",
                     "details": {
                         "write": True,
                         "read": True,
@@ -664,26 +600,19 @@ async def test_redis_connection():
                 }
             )
         else:
-            print("[ERROR] Redis 数据验证失败")
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "error",
-                    "message": "Redis 数据验证失败",
-                    "details": {
-                        "expected": test_value,
-                        "received": retrieved_value
-                    }
+                    "message": f"Redis 读取值不匹配: 期望 '{test_value}', 实际 '{result}'"
                 }
             )
-            
     except Exception as e:
-        error_msg = f"Redis 连接测试失败: {str(e)}"
-        print(f"[ERROR] {error_msg}")
+        print(f"[ERROR] Redis 连接测试失败: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={
                 "status": "error",
-                "message": error_msg
+                "message": f"Redis 连接测试失败: {str(e)}"
             }
         ) 
