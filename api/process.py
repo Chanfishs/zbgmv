@@ -45,16 +45,39 @@ async def get_redis_connection():
             raise Exception("REDIS_URL 环境变量未设置")
             
         print(f"[DEBUG] 正在建立新的 Redis 连接")
-        redis = await aioredis.from_url(
-            REDIS_URL,
-            encoding="utf-8",
-            decode_responses=True
-        )
         
-        # 测试新连接
-        await redis.ping()
-        print("[DEBUG] Redis 新连接建立成功")
-        return redis
+        # 添加重试逻辑
+        max_retries = 3
+        retry_delay = 1  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                redis = await aioredis.from_url(
+                    REDIS_URL,
+                    encoding="utf-8",
+                    decode_responses=True,
+                    socket_connect_timeout=30,
+                    socket_keepalive=True,
+                    retry_on_timeout=True,
+                    health_check_interval=30,
+                    max_connections=10
+                )
+                
+                # 测试新连接
+                await redis.ping()
+                print(f"[DEBUG] Redis 新连接建立成功 (尝试 {attempt + 1}/{max_retries})")
+                return redis
+                
+            except Exception as e:
+                print(f"[DEBUG] 连接尝试 {attempt + 1}/{max_retries} 失败: {str(e)}")
+                if redis:
+                    await redis.close()
+                    redis = None
+                if attempt < max_retries - 1:
+                    print(f"[DEBUG] 等待 {retry_delay} 秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise Exception(f"在 {max_retries} 次尝试后仍无法建立连接")
         
     except Exception as e:
         print(f"[ERROR] Redis 连接获取失败: {str(e)}")
