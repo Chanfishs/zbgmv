@@ -343,6 +343,92 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
     try:
         print(f"[DEBUG] ===== 开始处理任务 {task_id} =====")
         
+        # 第一步：文件格式和完整性检查
+        print(f"[DEBUG] ===== 文件格式和完整性检查 =====")
+        print(f"[DEBUG] 订单文件:")
+        print(f"[DEBUG] - 文件大小: {len(order_data)} bytes")
+        print(f"[DEBUG] - 文件头部特征: {order_data[:50]}")
+        
+        print(f"[DEBUG] 排班表文件:")
+        print(f"[DEBUG] - 文件大小: {len(schedule_data)} bytes")
+        print(f"[DEBUG] - 文件头部特征: {schedule_data[:50]}")
+        
+        # 第二步：数据结构和列名检查
+        print(f"[DEBUG] ===== 数据结构和列名检查 =====")
+        try:
+            # 尝试读取 Excel 文件的基本信息
+            excel_info = pd.ExcelFile(BytesIO(order_data))
+            print(f"[DEBUG] 订单文件工作表:")
+            print(f"[DEBUG] - 工作表列表: {excel_info.sheet_names}")
+            
+            # 读取第一行（列名）
+            df_header = pd.read_excel(BytesIO(order_data), nrows=0)
+            print(f"[DEBUG] 订单文件列名:")
+            print(f"[DEBUG] - 实际列名: {list(df_header.columns)}")
+            print(f"[DEBUG] - 期望列名: {required_order_columns}")
+            print(f"[DEBUG] - 列名匹配检查:")
+            for col in required_order_columns:
+                print(f"[DEBUG]   - {col}: {'存在' if col in df_header.columns else '不存在'}")
+        except Exception as e:
+            print(f"[ERROR] 数据结构检查失败: {str(e)}")
+            raise
+            
+        # 第三步：系统资源监控
+        print(f"[DEBUG] ===== 系统资源监控 =====")
+        import psutil
+        import os
+        
+        process = psutil.Process(os.getpid())
+        print(f"[DEBUG] 系统资源使用:")
+        print(f"[DEBUG] - CPU 使用率: {psutil.cpu_percent()}%")
+        print(f"[DEBUG] - 内存使用: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+        print(f"[DEBUG] - 系统内存使用率: {psutil.virtual_memory().percent}%")
+        print(f"[DEBUG] - 磁盘使用率: {psutil.disk_usage('/').percent}%")
+        
+        # 第四步：异步任务和 Redis 状态检查
+        print(f"[DEBUG] ===== 异步任务和 Redis 状态检查 =====")
+        print(f"[DEBUG] 异步任务信息:")
+        print(f"[DEBUG] - 事件循环运行状态: {asyncio.get_event_loop().is_running()}")
+        print(f"[DEBUG] - 当前任务数量: {len(asyncio.all_tasks())}")
+        
+        print(f"[DEBUG] Redis 连接状态:")
+        try:
+            redis_client = get_redis_client()
+            test_key = "test:connection"
+            test_value = "test_value"
+            redis_client.set(test_key, test_value)
+            result = redis_client.get(test_key)
+            redis_client.delete(test_key)
+            print(f"[DEBUG] - Redis 连接测试: {'成功' if result == test_value else '失败'}")
+            print(f"[DEBUG] - 当前任务状态: {redis_client.get(f'task:{task_id}')}")
+        except Exception as e:
+            print(f"[ERROR] Redis 状态检查失败: {str(e)}")
+            raise
+            
+        # 第五步：内存使用情况检查
+        print(f"[DEBUG] ===== 内存使用情况检查 =====")
+        import sys
+        
+        def get_size(obj, seen=None):
+            """递归计算对象大小"""
+            size = sys.getsizeof(obj)
+            if seen is None:
+                seen = set()
+            obj_id = id(obj)
+            if obj_id in seen:
+                return 0
+            seen.add(obj_id)
+            if isinstance(obj, dict):
+                size += sum([get_size(v, seen) for v in obj.values()])
+                size += sum([get_size(k, seen) for k in obj.keys()])
+            elif hasattr(obj, '__dict__'):
+                size += get_size(obj.__dict__, seen)
+            return size
+        
+        print(f"[DEBUG] 数据对象内存使用:")
+        print(f"[DEBUG] - 订单数据大小: {get_size(order_data) / 1024 / 1024:.2f} MB")
+        print(f"[DEBUG] - 排班表数据大小: {get_size(schedule_data) / 1024 / 1024:.2f} MB")
+
         # 更新状态：开始处理
         await set_task_status(task_id, {
             "status": "processing",
