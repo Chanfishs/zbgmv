@@ -569,6 +569,13 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             df = pd.read_excel(BytesIO(order_data))
             print(f"[DEBUG] 订单数据读取成功，共 {len(df)} 行")
             print(f"[DEBUG] 订单数据列名: {list(df.columns)}")
+            
+            # 添加列名映射
+            if '定制商品' in df.columns and '选购商品' not in df.columns:
+                print("[DEBUG] 检测到'定制商品'列，正在重命名为'选购商品'...")
+                df = df.rename(columns={'定制商品': '选购商品'})
+                print("[DEBUG] 列名重命名完成")
+            
         except Exception as e:
             error_msg = f"读取订单数据失败: {str(e)}"
             print(f"[ERROR] {error_msg}")
@@ -618,6 +625,19 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 # 数据类型转换
                 print("[DEBUG] 转换数据类型...")
                 chunk[['主订单编号', '子订单编号', '商品ID']] = chunk[['主订单编号', '子订单编号', '商品ID']].astype(str)
+                
+                # 检查并映射列名
+                if '定制商品' in chunk.columns and '选购商品' not in chunk.columns:
+                    print("[DEBUG] 检测到'定制商品'列，正在重命名为'选购商品'...")
+                    chunk = chunk.rename(columns={'定制商品': '选购商品'})
+                    print("[DEBUG] 列名重命名完成")
+                
+                # 验证必要的列是否存在
+                if '选购商品' not in chunk.columns:
+                    available_columns = list(chunk.columns)
+                    error_msg = f"找不到'选购商品'或'定制商品'列，当前可用列：{available_columns}"
+                    print(f"[ERROR] {error_msg}")
+                    raise Exception(error_msg)
                 
                 # 应用过滤条件
                 print("[DEBUG] 应用过滤条件...")
