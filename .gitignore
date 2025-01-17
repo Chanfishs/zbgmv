@@ -1,5 +1,61 @@
-*.pyc
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursorrules/
+
+# Logs and databases
+*.log
+*.sqlite
+logs/
+task_status.json
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+test_files/
+
+# Temporary files
 .DS_Store
-*.xlsx
-app.log
+._.DS_Store
+**/.DS_Store
+**/._.DS_Store
+*.tmp
+*.bak
+*.swp
+uploads/
+results/
+
+# Project specific
+example/
+.vercel 

@@ -278,15 +278,11 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             raise Exception("Redis 客户端初始化失败")
         
         logger.info("Redis 连接成功")
-        
-        print(f"[DEBUG] Redis 连接状态: {redis_client is not None}")
-        print(f"[DEBUG] Redis 配置: UPSTASH_REDIS_REST_URL 已设置: {bool(UPSTASH_REDIS_REST_URL)}")
-        print(f"[DEBUG] 订单文件名: {order_file.filename}")
-        print(f"[DEBUG] 排班表文件名: {schedule_file.filename}")
+        logger.debug(f"文件信息: order_file_size={order_file.size}, schedule_file_size={schedule_file.size}")
         
         # 验证文件扩展名
         if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
-            print("[ERROR] 文件格式错误：非 .xlsx 格式")
+            logger.error("文件格式错误：非 .xlsx 格式")
             return JSONResponse(
                 status_code=400,
                 content={"error": "文件格式错误：请上传 .xlsx 格式的文件"}
@@ -294,15 +290,16 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 
         # 读取文件内容
         try:
-            print("[DEBUG] 正在读取订单文件...")
+            logger.debug("开始读取订单文件...")
             order_data = await order_file.read()
-            print(f"[DEBUG] 订单文件大小: {len(order_data)} bytes")
+            logger.info(f"订单文件读取完成，大小: {len(order_data)} bytes")
             
-            print("[DEBUG] 正在读取排班表文件...")
+            logger.debug("开始读取排班表文件...")
             schedule_data = await schedule_file.read()
-            print(f"[DEBUG] 排班表文件大小: {len(schedule_data)} bytes")
+            logger.info(f"排班表文件读取完成，大小: {len(schedule_data)} bytes")
         except Exception as e:
-            print(f"[ERROR] 文件读取失败: {str(e)}")
+            logger.error(f"文件读取失败: {str(e)}")
+            logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
                 status_code=400,
                 content={"error": f"文件读取失败：{str(e)}"}
@@ -311,7 +308,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         # 验证文件大小
         MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
         if len(order_data) > MAX_FILE_SIZE or len(schedule_data) > MAX_FILE_SIZE:
-            print("[ERROR] 文件过大")
+            logger.error(f"文件过大: order_size={len(order_data)}, schedule_size={len(schedule_data)}")
             return JSONResponse(
                 status_code=400,
                 content={"error": "文件过大：请确保每个文件小于100MB"}
@@ -320,7 +317,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         try:
             # 创建任务ID并初始化状态
             task_id = str(uuid.uuid4())
-            print(f"[DEBUG] 创建任务ID: {task_id}")
+            logger.info(f"创建新任务: task_id={task_id}")
             
             # 初始化任务状态
             initial_status = {
@@ -332,11 +329,11 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             
             # 使用 redis_client 设置任务状态
             await set_task_status(task_id, initial_status)
-            print("[DEBUG] 任务状态已初始化")
+            logger.info(f"任务状态初始化完成: {initial_status}")
 
             # 启动后台任务
             background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
-            print("[DEBUG] 后台任务已启动")
+            logger.info("后台任务已启动")
 
             # 返回任务ID
             return JSONResponse(
@@ -347,18 +344,16 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             )
 
         except Exception as e:
-            print(f"[ERROR] 任务创建失败: {str(e)}")
-            if redis_client:
-                print(f"[DEBUG] Redis 连接正常")
-            else:
-                print(f"[ERROR] Redis 未连接")
+            logger.error(f"任务创建失败: {str(e)}")
+            logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
                 status_code=500,
                 content={"error": f"任务创建失败：{str(e)}"}
             )
 
     except Exception as e:
-        print(f"[ERROR] 系统错误: {str(e)}")
+        logger.error(f"系统错误: {str(e)}")
+        logger.error(f"错误详情: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={"error": f"系统错误：{str(e)}"}
