@@ -12,7 +12,7 @@ import time
 import json
 import os
 from datetime import datetime
-import aioredis
+from redis import asyncio as aioredis
 import base64
 
 # Redis 连接
