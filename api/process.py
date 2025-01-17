@@ -80,13 +80,15 @@ async def not_found_handler(request: Request, exc: HTTPException):
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     """处理文件上传"""
     try:
-        print(f"开始处理文件上传...")
-        print(f"订单文件名: {order_file.filename}")
-        print(f"排班表文件名: {schedule_file.filename}")
+        print(f"[DEBUG] 开始处理文件上传...")
+        print(f"[DEBUG] Redis 连接状态: {redis is not None}")
+        print(f"[DEBUG] Redis URL: {REDIS_URL}")
+        print(f"[DEBUG] 订单文件名: {order_file.filename}")
+        print(f"[DEBUG] 排班表文件名: {schedule_file.filename}")
         
         # 验证文件扩展名
         if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
-            print("文件格式错误：非 .xlsx 格式")
+            print("[ERROR] 文件格式错误：非 .xlsx 格式")
             return JSONResponse(
                 status_code=400,
                 content={"error": "文件格式错误：请上传 .xlsx 格式的文件"}
@@ -94,15 +96,15 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 
         # 读取文件内容
         try:
-            print("正在读取订单文件...")
+            print("[DEBUG] 正在读取订单文件...")
             order_data = await order_file.read()
-            print(f"订单文件大小: {len(order_data)} bytes")
+            print(f"[DEBUG] 订单文件大小: {len(order_data)} bytes")
             
-            print("正在读取排班表文件...")
+            print("[DEBUG] 正在读取排班表文件...")
             schedule_data = await schedule_file.read()
-            print(f"排班表文件大小: {len(schedule_data)} bytes")
+            print(f"[DEBUG] 排班表文件大小: {len(schedule_data)} bytes")
         except Exception as e:
-            print(f"文件读取失败: {str(e)}")
+            print(f"[ERROR] 文件读取失败: {str(e)}")
             return JSONResponse(
                 status_code=400,
                 content={"error": f"文件读取失败：{str(e)}"}
@@ -111,33 +113,50 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         # 验证文件大小
         MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
         if len(order_data) > MAX_FILE_SIZE or len(schedule_data) > MAX_FILE_SIZE:
+            print("[ERROR] 文件过大")
             return JSONResponse(
                 status_code=400,
                 content={"error": "文件过大：请确保每个文件小于100MB"}
             )
 
-        # 创建任务ID并初始化状态
-        task_id = str(uuid.uuid4())
-        await set_task_status(task_id, {
-            "status": "pending",
-            "progress": 0,
-            "message": "正在准备处理...",
-            "start_time": time.time()
-        })
-        
-        # 启动后台任务
-        background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
+        try:
+            # 创建任务ID并初始化状态
+            task_id = str(uuid.uuid4())
+            print(f"[DEBUG] 创建任务ID: {task_id}")
+            
+            await set_task_status(task_id, {
+                "status": "pending",
+                "progress": 0,
+                "message": "正在准备处理...",
+                "start_time": time.time()
+            })
+            print("[DEBUG] 任务状态已初始化")
+            
+            # 启动后台任务
+            background_tasks.add_task(process_data_in_background, task_id, order_data, schedule_data)
+            print("[DEBUG] 后台任务已启动")
 
-        # 返回任务ID
-        return JSONResponse(
-            content={
-                "task_id": task_id,
-                "message": "文件已接收，正在处理中"
-            }
-        )
+            # 返回任务ID
+            return JSONResponse(
+                content={
+                    "task_id": task_id,
+                    "message": "文件已接收，正在处理中"
+                }
+            )
+
+        except Exception as e:
+            print(f"[ERROR] 任务创建失败: {str(e)}")
+            if redis:
+                print(f"[DEBUG] Redis 连接正常")
+            else:
+                print(f"[ERROR] Redis 未连接")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"任务创建失败：{str(e)}"}
+            )
 
     except Exception as e:
-        print(f"系统错误: {str(e)}")
+        print(f"[ERROR] 系统错误: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": f"系统错误：{str(e)}"}
