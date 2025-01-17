@@ -296,6 +296,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
     """后台处理数据的异步函数"""
     try:
+        print(f"[DEBUG] 开始后台处理任务 {task_id}")
+        print(f"[DEBUG] 订单数据大小: {len(order_data)} bytes")
+        print(f"[DEBUG] 排班表数据大小: {len(schedule_data)} bytes")
+        
         # 更新任务状态
         await set_task_status(task_id, {
             "status": "processing",
@@ -303,12 +307,16 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "message": "正在读取数据...",
             "start_time": time.time()
         })
+        print(f"[DEBUG] 任务状态已更新: 进度 10%")
         
         # 处理数据
+        print(f"[DEBUG] 开始处理 Excel 数据")
         result = await process_excel_async(order_data, schedule_data, task_id)
+        print(f"[DEBUG] Excel 数据处理完成，结果大小: {len(result)} bytes")
         
         # 将结果转换为base64
         result_base64 = base64.b64encode(result).decode('utf-8')
+        print(f"[DEBUG] 结果已转换为 base64")
         
         # 更新任务状态为完成
         await set_task_status(task_id, {
@@ -317,12 +325,18 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "message": "处理完成",
             "result": result_base64
         })
+        print(f"[DEBUG] 任务 {task_id} 处理完成")
+        
     except Exception as e:
+        print(f"[ERROR] 后台任务处理失败: {str(e)}")
+        print(f"[ERROR] 错误类型: {type(e)}")
+        print(f"[ERROR] 错误详情: {str(e)}")
         # 更新任务状态为失败
         await set_task_status(task_id, {
             "status": "failed",
             "message": str(e)
         })
+        print(f"[DEBUG] 任务 {task_id} 已标记为失败")
 
 async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: str):
     """异步处理 Excel 数据的核心逻辑"""
