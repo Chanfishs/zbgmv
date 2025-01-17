@@ -17,13 +17,15 @@ import base64
 import traceback
 import sys
 import logging
+from typing import Dict, Set, Optional, List
 
-# 配置日志记录
+# 配置日志格式
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout  # 确保日志输出到 stdout
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入 psutil，如果不可用则跳过
@@ -206,37 +208,90 @@ app.mount("/static", StaticFiles(directory="api/static"), name="static")
 # 配置模板
 templates = Jinja2Templates(directory="api/templates")
 
-# 创建一个自定义的日志处理器
-class WebSocketLogHandler(logging.Handler):
+# WebSocket 连接管理
+class ConnectionManager:
     def __init__(self):
-        super().__init__()
-        self.active_connections = set()
+        self.active_connections: Set[WebSocket] = set()
+        self.message_queue: List[Dict] = []
+        self.max_queue_size = 1000
 
-    def emit(self, record):
-        message = self.format(record)
-        for connection in self.active_connections:
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.add(websocket)
+        logger.info(f"WebSocket client connected. Total connections: {len(self.active_connections)}")
+        
+        # 发送队列中的历史消息
+        for message in self.message_queue:
             try:
-                asyncio.create_task(connection.send_json({
-                    'level': record.levelname.lower(),
-                    'message': message
-                }))
-            except Exception:
-                pass
+                await websocket.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending queued message: {str(e)}")
+                break
 
-# 创建 WebSocket 日志处理器实例
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+        logger.info(f"WebSocket client disconnected. Total connections: {len(self.active_connections)}")
+
+    async def broadcast(self, message: str, level: str = "info"):
+        data = {
+            "message": message,
+            "level": level,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # 添加到消息队列
+        self.message_queue.append(data)
+        if len(self.message_queue) > self.max_queue_size:
+            self.message_queue.pop(0)
+        
+        # 广播给所有连接
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(data)
+            except Exception as e:
+                logger.error(f"Error broadcasting message: {str(e)}")
+                self.active_connections.remove(connection)
+
+# 创建连接管理器实例
+manager = ConnectionManager()
+
+# 自定义日志处理器
+class WebSocketLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            # 使用 asyncio.create_task 在事件循环中运行广播
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(
+                    manager.broadcast(msg, record.levelname.lower())
+                )
+            else:
+                asyncio.run(
+                    manager.broadcast(msg, record.levelname.lower())
+                )
+        except Exception as e:
+            print(f"Error in WebSocketLogHandler: {str(e)}")
+
+# 添加WebSocket日志处理器
 ws_handler = WebSocketLogHandler()
-ws_handler.setFormatter(logging.Formatter('%(message)s'))
+ws_handler.setFormatter(
+    logging.Formatter('%(message)s')
+)
 logger.addHandler(ws_handler)
 
+# 测试日志输出
 @app.on_event("startup")
 async def startup_event():
     """应用程序启动时的事件处理"""
-    global redis
     try:
+        logger.info("应用程序启动")
+        logger.info("正在初始化 Redis 连接...")
+        global redis
         redis = get_redis_client()
-        print("[DEBUG] 应用程序启动时 Redis 连接状态:", redis is not None)
+        logger.info("Redis 连接初始化完成")
     except Exception as e:
-        print(f"[ERROR] 应用程序启动失败: {str(e)}")
+        logger.error(f"应用程序启动失败: {str(e)}")
         raise
 
 @app.on_event("shutdown")
@@ -780,12 +835,13 @@ async def test_redis_connection():
 
 @app.websocket("/api/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    ws_handler.active_connections.add(websocket)
+    """WebSocket 连接处理"""
+    await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()  # 保持连接活跃
-    except Exception:
-        pass
+            # 保持连接活跃
+            await websocket.receive_text()
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}")
     finally:
-        ws_handler.active_connections.remove(websocket) 
+        manager.disconnect(websocket) 
