@@ -18,6 +18,8 @@ import base64
 # Redis 连接
 REDIS_URL = os.getenv('REDIS_URL')
 print(f"[DEBUG] 初始化时的 REDIS_URL: {REDIS_URL}")
+
+# 创建 Redis 连接
 redis = None
 
 # 任务过期时间（秒）
@@ -58,10 +60,11 @@ async def init_redis():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """处理应用程序的生命周期事件"""
+    global redis
     try:
         # 启动时连接Redis
-        global redis
         redis = await init_redis()
+        print("[DEBUG] 应用程序启动时 Redis 连接状态:", redis is not None)
         yield
     except Exception as e:
         print(f"[ERROR] 应用程序启动失败: {str(e)}")
@@ -73,7 +76,7 @@ async def lifespan(app: FastAPI):
             await redis.close()
             print("[DEBUG] Redis 连接已关闭")
 
-# 创建 FastAPI 应用实例
+# 创建 FastAPI 应用实例，并确保使用 lifespan
 app = FastAPI(lifespan=lifespan)
 
 # 配置静态文件
@@ -84,8 +87,14 @@ templates = Jinja2Templates(directory="api/templates")
 
 async def get_task_status(task_id: str) -> dict:
     """从Redis获取任务状态"""
+    global redis
     if not redis:
-        raise HTTPException(status_code=500, detail="Redis未连接")
+        print("[ERROR] Redis 未连接，尝试重新初始化...")
+        try:
+            redis = await init_redis()
+        except Exception as e:
+            print(f"[ERROR] Redis 重新初始化失败: {str(e)}")
+            raise HTTPException(status_code=500, detail="Redis未连接且重新初始化失败")
     
     status = await redis.get(f"task:{task_id}")
     if status:
@@ -94,8 +103,14 @@ async def get_task_status(task_id: str) -> dict:
 
 async def set_task_status(task_id: str, status: dict):
     """设置任务状态到Redis"""
+    global redis
     if not redis:
-        raise HTTPException(status_code=500, detail="Redis未连接")
+        print("[ERROR] Redis 未连接，尝试重新初始化...")
+        try:
+            redis = await init_redis()
+        except Exception as e:
+            print(f"[ERROR] Redis 重新初始化失败: {str(e)}")
+            raise HTTPException(status_code=500, detail="Redis未连接且重新初始化失败")
     
     await redis.set(
         f"task:{task_id}",
