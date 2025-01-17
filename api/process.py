@@ -624,7 +624,7 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
                 keywords = ['SSS', 'DB', 'TZDN', 'DF', 'SP', 'sp', 'SC', 'sc', 'spcy']
                 initial_count = len(chunk)
                 
-                # 记录每个过滤步骤的结果
+                # 根据"选购商品"筛选
                 chunk_filtered = chunk[~chunk['选购商品'].apply(lambda x: any(kw in str(x) for kw in keywords))]
                 print(f"[DEBUG] 关键词过滤后剩余: {len(chunk_filtered)}/{initial_count} 行")
                 
@@ -888,7 +888,12 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             print("[DEBUG] 计算主播汇总...")
             if '主播姓名' in df_schedule.columns:
                 df_anchor_sum = df_schedule.groupby('主播姓名', as_index=False)[cols_to_sum].sum()
-                df_anchor_sum.columns = ['主播姓名', '主播GMV总和', '主播退货GMV总和', '主播GSV总和', '总消耗']
+                df_anchor_sum.rename(columns={
+                    'GMV': '主播GMV总和',
+                    '退货GMV': '主播退货GMV总和',
+                    'GSV': '主播GSV总和',
+                    '时段消耗': '总消耗'
+                }, inplace=True)
                 print(f"[DEBUG] 主播汇总完成，共 {len(df_anchor_sum)} 条记录")
             else:
                 print("[WARNING] 未找到主播姓名列，跳过主播汇总")
@@ -898,7 +903,12 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
             print("[DEBUG] 计算场控汇总...")
             if '场控姓名' in df_schedule.columns:
                 df_ck_sum = df_schedule.groupby('场控姓名', as_index=False)[cols_to_sum].sum()
-                df_ck_sum.columns = ['场控姓名', '场控GMV总和', '场控退货GMV总和', '场控GSV总和', '总消耗']
+                df_ck_sum.rename(columns={
+                    'GMV': '场控GMV总和',
+                    '退货GMV': '场控退货GMV总和',
+                    'GSV': '场控GSV总和',
+                    '时段消耗': '总消耗'
+                }, inplace=True)
                 print(f"[DEBUG] 场控汇总完成，共 {len(df_ck_sum)} 条记录")
             else:
                 print("[WARNING] 未找到场控姓名列，跳过场控汇总")
