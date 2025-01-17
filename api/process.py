@@ -14,9 +14,22 @@ import os
 from datetime import datetime
 from redis import asyncio as aioredis
 import base64
+from urllib.parse import urlparse
 
 # Redis 连接配置
-REDIS_URL = os.getenv('REDIS_URL')
+UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
+UPSTASH_REDIS_REST_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+
+# 构建 Redis URL
+if UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN:
+    # 从 REST URL 中提取主机名
+    parsed_url = urlparse(UPSTASH_REDIS_REST_URL)
+    host = parsed_url.netloc
+    # 构建标准的 Redis URL
+    REDIS_URL = f"redis://default:{UPSTASH_REDIS_REST_TOKEN}@{host}"
+else:
+    REDIS_URL = None
+
 print(f"[DEBUG] Redis URL 配置: {REDIS_URL}")
 redis = None
 
