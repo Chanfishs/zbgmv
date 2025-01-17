@@ -19,6 +19,12 @@ import base64
 UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
 UPSTASH_REDIS_REST_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
 
+# 必需的列名定义
+required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
+                         '流量体裁', '取消原因', '订单状态', '订单应付金额', 
+                         '订单提交日期', '订单提交时间']
+required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
+
 print("[DEBUG] ===== Redis 配置信息 =====")
 print(f"[DEBUG] UPSTASH_REDIS_REST_URL: {UPSTASH_REDIS_REST_URL}")
 print(f"[DEBUG] UPSTASH_REDIS_REST_TOKEN: {'***' + UPSTASH_REDIS_REST_TOKEN[-8:] if UPSTASH_REDIS_REST_TOKEN else 'None'}")
