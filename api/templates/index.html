@@ -55,6 +55,29 @@
             border-color: #60a5fa;
             background-color: #eff6ff;
         }
+        #logWindow {
+            background-color: #1a1a1a;
+            border: 1px solid #333;
+            font-family: 'Courier New', monospace;
+        }
+        
+        #logWindow::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        #logWindow::-webkit-scrollbar-track {
+            background: #333;
+        }
+        
+        #logWindow::-webkit-scrollbar-thumb {
+            background: #666;
+            border-radius: 4px;
+        }
+        
+        .log-debug { color: #98c379; }
+        .log-info { color: #61afef; }
+        .log-warning { color: #e5c07b; }
+        .log-error { color: #e06c75; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -74,11 +97,19 @@
                 </div>
                 {% endif %}
 
+                <!-- 日志显示窗口 -->
+                <div class="mb-8">
+                    <h2 class="text-xl font-semibold mb-2">系统日志</h2>
+                    <div id="logWindow" class="bg-black text-green-400 p-4 rounded-lg h-64 overflow-y-auto font-mono text-sm">
+                        <pre id="logContent"></pre>
+                    </div>
+                </div>
+
                 <!-- 主要内容区 -->
                 <div class="bg-white rounded-xl shadow-lg p-8 mb-8">
                     <div class="mb-8">
                         <h2 class="text-2xl font-semibold text-gray-800 mb-6">文件上传</h2>
-                        <form id="uploadForm" class="space-y-6">
+                        <form id="uploadForm" class="space-y-6" enctype="multipart/form-data">
                             <!-- 订单数据文件上传 -->
                             <div class="file-upload-container">
                                 <div class="drag-drop-zone" id="orderDropZone">
@@ -361,6 +392,49 @@
                 }
             });
         });
+
+        // 日志处理函数
+        function appendLog(message, level = 'debug') {
+            const logContent = document.getElementById('logContent');
+            const logLine = document.createElement('div');
+            logLine.className = `log-${level}`;
+            logLine.textContent = `${new Date().toISOString()} [${level.toUpperCase()}] ${message}`;
+            logContent.appendChild(logLine);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+
+        // WebSocket 连接
+        let ws = null;
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/ws/logs`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onmessage = function(event) {
+                const logData = JSON.parse(event.data);
+                appendLog(logData.message, logData.level);
+            };
+
+            ws.onclose = function() {
+                setTimeout(connectWebSocket, 1000); // 重连
+            };
+        }
+
+        // 页面加载时连接 WebSocket
+        window.addEventListener('load', connectWebSocket);
+
+        // 修改现有的上传处理函数，添加日志显示
+        async function handleUpload(event) {
+            event.preventDefault();
+            appendLog('开始处理文件上传...', 'info');
+            // ... existing upload code ...
+        }
+
+        // 修改现有的状态检查函数，添加日志显示
+        async function checkStatus(taskId) {
+            appendLog(`检查任务状态: ${taskId}`, 'debug');
+            // ... existing status check code ...
+        }
     </script>
 </body>
 </html> 

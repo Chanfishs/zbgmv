@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Request, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Request, HTTPException, WebSocket
 from fastapi.responses import Response, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -205,6 +205,28 @@ app.mount("/static", StaticFiles(directory="api/static"), name="static")
 
 # 配置模板
 templates = Jinja2Templates(directory="api/templates")
+
+# 创建一个自定义的日志处理器
+class WebSocketLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.active_connections = set()
+
+    def emit(self, record):
+        message = self.format(record)
+        for connection in self.active_connections:
+            try:
+                asyncio.create_task(connection.send_json({
+                    'level': record.levelname.lower(),
+                    'message': message
+                }))
+            except Exception:
+                pass
+
+# 创建 WebSocket 日志处理器实例
+ws_handler = WebSocketLogHandler()
+ws_handler.setFormatter(logging.Formatter('%(message)s'))
+logger.addHandler(ws_handler)
 
 @app.on_event("startup")
 async def startup_event():
@@ -755,3 +777,15 @@ async def test_redis_connection():
                 "message": f"Redis 连接测试失败: {str(e)}"
             }
         ) 
+
+@app.websocket("/api/ws/logs")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    ws_handler.active_connections.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # 保持连接活跃
+    except Exception:
+        pass
+    finally:
+        ws_handler.active_connections.remove(websocket) 
