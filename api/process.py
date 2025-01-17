@@ -16,7 +16,8 @@ from redis import asyncio as aioredis
 import base64
 
 # Redis 连接
-REDIS_URL = os.getenv('REDIS_URL', 'redis://default:AXiRASQgOWM3MjFlMWYtMGRhOS00ODUxLWIwYzktNWJmMGE0NzM2NTdhMmVmNTk4MjhkMGQ5NGZiY2JkN2UzZTMxMTEwMWZmMTg=@gusc1-eager-cheetah-30865.upstash.io:30865')
+REDIS_URL = os.getenv('REDIS_URL')
+print(f"[DEBUG] 初始化时的 REDIS_URL: {REDIS_URL}")
 redis = None
 
 # 任务过期时间（秒）
@@ -28,6 +29,10 @@ async def lifespan(app: FastAPI):
     try:
         # 启动时连接Redis
         global redis
+        if not REDIS_URL:
+            print("[ERROR] REDIS_URL 环境变量未设置")
+            raise Exception("REDIS_URL 环境变量未设置")
+            
         print(f"[DEBUG] 正在连接 Redis: {REDIS_URL}")
         redis = await aioredis.from_url(
             REDIS_URL,
