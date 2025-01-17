@@ -280,6 +280,47 @@ ws_handler.setFormatter(
 )
 logger.addHandler(ws_handler)
 
+# 日志存储
+log_buffer = []
+log_id_counter = 0
+
+def add_log(message: str, level: str = "info"):
+    global log_id_counter
+    log_id_counter += 1
+    log_entry = {
+        "id": log_id_counter,
+        "message": message,
+        "level": level,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    log_buffer.append(log_entry)
+    # 保持最近1000条日志
+    if len(log_buffer) > 1000:
+        log_buffer.pop(0)
+    return log_entry
+
+# 自定义日志处理器
+class BufferLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            add_log(msg, record.levelname.lower())
+        except Exception as e:
+            print(f"Error in BufferLogHandler: {str(e)}")
+
+# 添加缓冲日志处理器
+buffer_handler = BufferLogHandler()
+buffer_handler.setFormatter(
+    logging.Formatter('%(message)s')
+)
+logger.addHandler(buffer_handler)
+
+# 日志获取接口
+@app.get("/api/logs")
+async def get_logs(since: int = 0):
+    """获取指定ID之后的日志"""
+    return [log for log in log_buffer if log["id"] > since]
+
 # 测试日志输出
 @app.on_event("startup")
 async def startup_event():

@@ -425,78 +425,50 @@
             }
         }
 
-        // WebSocket 连接
-        let ws = null;
-        let reconnectAttempts = 0;
-        const maxReconnectAttempts = 5;
-
-        function connectWebSocket() {
-            if (reconnectAttempts >= maxReconnectAttempts) {
+        // 轮询获取日志
+        let lastLogId = 0;
+        async function pollLogs() {
+            try {
+                const response = await fetch(`${getApiBaseUrl()}/api/logs?since=${lastLogId}`);
+                if (!response.ok) {
+                    throw new Error(`获取日志失败: ${response.status}`);
+                }
+                
+                const logs = await response.json();
+                if (logs && logs.length > 0) {
+                    logs.forEach(log => {
+                        appendLog(log);
+                        lastLogId = Math.max(lastLogId, log.id);
+                    });
+                }
+            } catch (error) {
+                console.error('获取日志错误:', error);
                 appendLog({
                     level: 'error',
-                    message: '无法连接到日志服务器，请刷新页面重试'
+                    message: `获取日志失败: ${error.message}`
                 });
-                return;
             }
+        }
 
-            // 根据环境构建 WebSocket URL
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            let wsUrl;
-            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-                wsUrl = `${protocol}//${window.location.host}/api/ws/logs`;
-            } else {
-                // Vercel 环境使用 HTTPS
-                wsUrl = `wss://${window.location.host}/api/ws/logs`;
+        // 开始轮询
+        let pollInterval = null;
+        function startPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
             }
+            // 每秒轮询一次
+            pollInterval = setInterval(pollLogs, 1000);
             
-            console.log('Connecting to WebSocket:', wsUrl);
-            ws = new WebSocket(wsUrl);
-
-            ws.onopen = function() {
-                appendLog({
-                    level: 'info',
-                    message: '已连接到日志服务器'
-                });
-                reconnectAttempts = 0;
-            };
-
-            ws.onmessage = function(event) {
-                const logData = JSON.parse(event.data);
-                appendLog(logData);
-            };
-
-            ws.onclose = function() {
-                appendLog({
-                    level: 'warning',
-                    message: '与日志服务器的连接已断开，正在尝试重新连接...'
-                });
-                reconnectAttempts++;
-                setTimeout(connectWebSocket, 1000);
-            };
-
-            ws.onerror = function(error) {
-                appendLog({
-                    level: 'error',
-                    message: `WebSocket 错误: ${error.message || '未知错误'}`
-                });
-            };
+            // 添加页面卸载时的清理
+            window.addEventListener('beforeunload', () => {
+                if (pollInterval) {
+                    clearInterval(pollInterval);
+                }
+            });
         }
 
-        // 页面加载时连接 WebSocket
-        window.addEventListener('load', connectWebSocket);
-
-        // 修改现有的上传处理函数，添加日志显示
-        async function handleUpload(event) {
-            event.preventDefault();
-            appendLog('开始处理文件上传...', 'info');
-            // ... existing upload code ...
-        }
-
-        // 修改现有的状态检查函数，添加日志显示
-        async function checkStatus(taskId) {
-            appendLog(`检查任务状态: ${taskId}`, 'debug');
-            // ... existing status check code ...
-        }
+        // 页面加载时开始轮询
+        window.addEventListener('load', startPolling);
     </script>
 </body>
 </html> 
