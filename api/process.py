@@ -531,3 +531,71 @@ async def process_excel_async(order_data: bytes, schedule_data: bytes, task_id: 
         error_msg = f"数据处理失败: {str(e)}"
         print(error_msg)  # 打印错误日志
         raise Exception(error_msg) 
+
+@app.get("/api/test-redis")
+async def test_redis_connection():
+    """测试 Redis 连接状态"""
+    try:
+        print("[DEBUG] 开始测试 Redis 连接")
+        print(f"[DEBUG] Redis URL: {REDIS_URL}")
+        
+        if not redis:
+            print("[ERROR] Redis 客户端未初始化")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": "Redis 客户端未初始化"}
+            )
+            
+        # 测试基本操作
+        test_key = "test:connection"
+        test_value = f"test_{time.time()}"
+        
+        # 设置测试值
+        print("[DEBUG] 尝试写入测试数据")
+        await redis.set(test_key, test_value, ex=60)
+        
+        # 读取测试值
+        print("[DEBUG] 尝试读取测试数据")
+        retrieved_value = await redis.get(test_key)
+        
+        # 删除测试值
+        print("[DEBUG] 尝试删除测试数据")
+        await redis.delete(test_key)
+        
+        if retrieved_value == test_value:
+            print("[DEBUG] Redis 连接测试成功")
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "message": "Redis 连接正常",
+                    "details": {
+                        "write": True,
+                        "read": True,
+                        "delete": True
+                    }
+                }
+            )
+        else:
+            print("[ERROR] Redis 数据验证失败")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": "Redis 数据验证失败",
+                    "details": {
+                        "expected": test_value,
+                        "received": retrieved_value
+                    }
+                }
+            )
+            
+    except Exception as e:
+        error_msg = f"Redis 连接测试失败: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": error_msg
+            }
+        ) 
