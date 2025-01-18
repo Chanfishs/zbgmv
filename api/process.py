@@ -478,8 +478,10 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
         wb = openpyxl.load_workbook(filename=order_file_path, read_only=True)
         ws = wb.active
         
-        # 获取总行数和列名
-        total_rows = ws.max_row - 1  # 减去表头
+        # 获取总行数(减去表头)
+        total_rows = ws.max_row - 1
+        
+        # 只读取一次表头
         headers = [cell.value for cell in next(ws.rows)]
         
         chunk_size = 1000
@@ -487,24 +489,35 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
         processed_chunks = []
         current_row = 0
         
-        # 跳过表头
-        next(ws.rows)
-        
-        # 分块处理数据
+        # 直接开始读取数据行
         for row in ws.rows:
             current_row += 1
-            rows_buffer.append([cell.value for cell in row])
             
-            # 当收集到一定数量的行,就处理
+            # 获取行数据
+            row_data = [cell.value for cell in row]
+            
+            # 验证行数据的有效性
+            if not is_valid_row(row_data, headers):
+                logger.warning(f"跳过无效行: {row_data}")
+                continue
+                
+            rows_buffer.append(row_data)
+            
+            # 当收集到一定数量的行时处理
             if len(rows_buffer) >= chunk_size:
                 # 转换为 DataFrame 并处理
                 chunk_df = pd.DataFrame(rows_buffer, columns=headers)
+                
+                # 清理和转换日期
+                chunk_df = clean_and_parse_dates(chunk_df)
+                
+                # 处理有效数据
                 processed_chunk = process_chunk(chunk_df, schedule_df)
                 if not processed_chunk.empty:
                     processed_chunks.append(processed_chunk)
                 
                 # 更新进度
-                progress = 20 + int(current_row * 60 / total_rows)  # 处理过程占60%进度
+                progress = 20 + int(current_row * 60 / total_rows)
                 await set_task_status(task_id, {
                     'status': 'processing',
                     'progress': progress,
@@ -514,11 +527,12 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
                 # 清理内存
                 rows_buffer = []
                 gc.collect()
-                await asyncio.sleep(0.1)  # 让出控制权
+                await asyncio.sleep(0.1)
         
         # 处理剩余的数据
         if rows_buffer:
             chunk_df = pd.DataFrame(rows_buffer, columns=headers)
+            chunk_df = clean_and_parse_dates(chunk_df)
             processed_chunk = process_chunk(chunk_df, schedule_df)
             if not processed_chunk.empty:
                 processed_chunks.append(processed_chunk)
@@ -542,7 +556,7 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'message': '生成结果文件...'
         })
         
-        # 创建一个临时文件来保存结果
+        # 创建临时文件保存结果
         with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
             final_df.to_excel(tmp_file.name, index=False)
             
@@ -577,7 +591,62 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             os.unlink(schedule_file_path)
         except:
             pass
+
+def is_valid_row(row_data: List, headers: List[str]) -> bool:
+    """验证行数据的有效性"""
+    try:
+        # 检查数据列数是否匹配
+        if len(row_data) != len(headers):
+            return False
             
+        # 检查是否为空行
+        if all(cell is None or str(cell).strip() == '' for cell in row_data):
+            return False
+            
+        # 检查关键字段
+        order_id_idx = headers.index('主订单编号')
+        date_idx = headers.index('订单提交日期')
+        time_idx = headers.index('订单提交时间')
+        
+        # 主订单编号不能为空
+        if not row_data[order_id_idx]:
+            return False
+            
+        # 日期和时间必须存在
+        if not row_data[date_idx] or not row_data[time_idx]:
+            return False
+            
+        return True
+    except Exception as e:
+        logger.error(f"行数据验证失败: {str(e)}")
+        return False
+
+def clean_and_parse_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """清理和解析日期时间"""
+    try:
+        # 确保日期和时间列存在
+        if '订单提交日期' not in df.columns or '订单提交时间' not in df.columns:
+            raise ValueError("缺少日期或时间列")
+            
+        # 转换为字符串并清理
+        df['订单提交日期'] = df['订单提交日期'].astype(str).str.strip()
+        df['订单提交时间'] = df['订单提交时间'].astype(str).str.strip()
+        
+        # 尝试解析日期时间
+        df['订单提交时间'] = pd.to_datetime(
+            df['订单提交日期'] + ' ' + df['订单提交时间'],
+            format='%Y-%m-%d %H:%M:%S',
+            errors='coerce'
+        )
+        
+        # 删除无效的日期行
+        df.dropna(subset=['订单提交时间'], inplace=True)
+        
+        return df
+    except Exception as e:
+        logger.error(f"日期解析失败: {str(e)}")
+        return pd.DataFrame()  # 返回空DataFrame
+
 def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataFrame:
     """处理单个数据块的函数"""
     try:
