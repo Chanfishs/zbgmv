@@ -290,14 +290,61 @@ async def process_files(
 async def get_task_status_endpoint(task_id: str):
     """获取任务处理状态"""
     try:
-        status = await get_task_status(task_id)
-        if not status:
+        # 1. 获取 Redis 客户端
+        redis_client = get_redis_client()
+        if not redis_client:
+            logger.error("Redis 客户端初始化失败")
             return JSONResponse(
-                status_code=404,
-                content={"error": "任务不存在"}
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": "Redis 连接失败",
+                    "progress": 0
+                }
+            )
+            
+        # 2. 获取任务状态
+        status_key = f"task:{task_id}:status"
+        try:
+            status_data = redis_client.get(status_key)
+        except Exception as e:
+            logger.error(f"从 Redis 获取状态失败: {str(e)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"获取任务状态失败: {str(e)}",
+                    "progress": 0
+                }
             )
         
-        # 根据任务状态返回不同的响应
+        # 3. 检查任务是否存在
+        if not status_data:
+            logger.warning(f"任务不存在: {task_id}")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "not_found",
+                    "message": "任务不存在",
+                    "progress": 0
+                }
+            )
+            
+        # 4. 解析状态数据
+        try:
+            status = json.loads(status_data)
+        except json.JSONDecodeError as e:
+            logger.error(f"状态数据解析失败: {str(e)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": "状态数据格式错误",
+                    "progress": 0
+                }
+            )
+        
+        # 5. 根据任务状态返回不同的响应
         if status["status"] == "completed":
             result = status.get("result")
             if result:
@@ -305,36 +352,35 @@ async def get_task_status_endpoint(task_id: str):
                     "status": "completed",
                     "progress": 100,
                     "message": "处理完成",
-                    "result": result,
-                    "filename": "processed_result.xlsx"
+                    "result": result
                 })
             return JSONResponse(content={
                 "status": "completed",
                 "progress": 100,
                 "message": "处理完成"
             })
+            
         elif status["status"] == "failed":
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "status": "failed",
-                    "message": status.get("message", "处理失败"),
-                    "progress": 0
-                }
-            )
+            return JSONResponse(content={
+                "status": "failed",
+                "message": status.get("message", "处理失败"),
+                "progress": 0
+            })
+            
         else:
             return JSONResponse(content={
                 "status": status["status"],
                 "progress": status.get("progress", 0),
                 "message": status.get("message", "正在处理...")
             })
+            
     except Exception as e:
-        logger.error(f"获取任务状态失败: {str(e)}")
+        logger.error(f"获取任务状态时发生未知错误: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
                 "status": "error",
-                "message": f"获取任务状态失败：{str(e)}",
+                "message": f"系统错误: {str(e)}",
                 "progress": 0
             }
         )
