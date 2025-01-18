@@ -191,7 +191,7 @@ async def process_files(
 ):
     """处理上传的文件"""
     try:
-        # 1. 首先通过 Content-Length 快速判断文件大小
+        # 1. 首先通过 Content-Length 快速判断总体大小
         content_length = request.headers.get('content-length')
         if content_length and int(content_length) > 200 * 1024 * 1024:  # 200MB (两个文件总和)
             raise HTTPException(status_code=413, detail="上传文件总大小超过限制")
@@ -202,63 +202,73 @@ async def process_files(
         if not schedule_file.filename.endswith('.xlsx'):
             raise HTTPException(status_code=400, detail="排班表必须是 Excel 文件(.xlsx)")
             
-        # 3. 生成任务ID
+        # 3. 验证单个文件大小
+        max_size = 100 * 1024 * 1024  # 100MB
+        
+        # 验证订单文件大小
+        order_file.file.seek(0, 2)  # 移动到文件末尾
+        order_size = order_file.file.tell()  # 获取文件大小
+        order_file.file.seek(0)  # 回到文件开头
+        
+        if order_size > max_size:
+            raise HTTPException(status_code=413, detail="订单文件大小超过限制")
+            
+        # 验证排班表大小
+        schedule_file.file.seek(0, 2)
+        schedule_size = schedule_file.file.tell()
+        schedule_file.file.seek(0)
+        
+        if schedule_size > max_size:
+            raise HTTPException(status_code=413, detail="排班表文件大小超过限制")
+            
+        # 4. 生成任务ID
         task_id = str(uuid.uuid4())
         logger.info(f"开始处理任务 {task_id}")
         
-        # 4. 保存文件到临时目录
+        # 5. 保存文件到临时目录
         order_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
         schedule_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
         
         try:
-            # 5. 分块读取并写入文件
-            max_size = 100 * 1024 * 1024  # 单个文件最大 100MB
+            # 6. 分块读取并写入文件
             chunk_size = 1024 * 1024  # 每次读取 1MB
             
-            # 处理订单文件
-            uploaded_size = 0
+            # 复制订单文件
             while True:
                 chunk = await order_file.read(chunk_size)
                 if not chunk:
                     break
-                uploaded_size += len(chunk)
-                if uploaded_size > max_size:
-                    raise HTTPException(status_code=413, detail="订单文件大小超过限制")
                 order_temp.write(chunk)
                 
-            # 处理排班表文件
-            uploaded_size = 0
+            # 复制排班表文件
             while True:
                 chunk = await schedule_file.read(chunk_size)
                 if not chunk:
                     break
-                uploaded_size += len(chunk)
-                if uploaded_size > max_size:
-                    raise HTTPException(status_code=413, detail="排班表文件大小超过限制")
                 schedule_temp.write(chunk)
                 
             # 关闭文件
             order_temp.close()
             schedule_temp.close()
             
-            logger.info(f"文件上传完成: order_file={order_file.filename}, schedule_file={schedule_file.filename}")
+            logger.info(f"文件上传完成: order_file={order_file.filename}({order_size/1024/1024:.2f}MB), schedule_file={schedule_file.filename}({schedule_size/1024/1024:.2f}MB)")
             
-            # 6. 初始化任务状态
+            # 7. 初始化任务状态
             await set_task_status(task_id, {
                 'status': 'processing',
                 'progress': 0,
                 'message': '开始处理...',
-                'start_time': datetime.now().isoformat()
+                'start_time': datetime.datetime.now().isoformat()
             })
             
-            # 7. 启动后台处理
+            # 8. 启动后台处理
             asyncio.create_task(process_data_in_background(
                 task_id=task_id,
                 order_file_path=order_temp.name,
                 schedule_file_path=schedule_temp.name
             ))
             
-            # 8. 立即返回任务ID
+            # 9. 立即返回任务ID
             return {"task_id": task_id}
             
         except Exception as e:
