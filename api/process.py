@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 尝试导入 psutil，如果不可用则跳过
-        try:
+try:
     import psutil
     HAS_PSUTIL = True
 except ImportError:
@@ -69,7 +69,7 @@ redis = None
 def get_redis_client():
     """获取 Redis 客户端实例"""
     global redis
-        try:
+try:
         if not redis:
             if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
                 print("[ERROR] Redis 配置未设置")
@@ -96,7 +96,7 @@ def get_redis_client():
 
 async def get_task_status(task_id: str) -> dict:
     """从Redis获取任务状态"""
-        try:
+try:
         redis = get_redis_client()
         key = f"task_status:{task_id}"
         print(f"[DEBUG] 获取任务状态，键名: {key}")
@@ -106,10 +106,10 @@ async def get_task_status(task_id: str) -> dict:
             print(f"[DEBUG] 未找到任务状态: {key}")
             return {"status": "not_found"}
         
-        try:
+try:
             status_dict = json.loads(status)
             print(f"[DEBUG] 成功解析任务状态: {status_dict}")
-        except json.JSONDecodeError as e:
+    except json.JSONDecodeError as e:
             print(f"[ERROR] 解析任务状态失败: {str(e)}")
             return {"status": "error", "message": "任务状态格式错误"}
         
@@ -144,7 +144,7 @@ async def get_task_status(task_id: str) -> dict:
 
 async def set_task_status(task_id: str, status: dict):
     """设置任务状态到Redis"""
-        try:
+try:
         redis = get_redis_client()
         key = f"task_status:{task_id}"
         print(f"[DEBUG] 设置任务状态，键名: {key}")
@@ -222,7 +222,7 @@ class ConnectionManager:
         
         # 发送队列中的历史消息
         for message in self.message_queue:
-        try:
+try:
                 await websocket.send_json(message)
             except Exception as e:
                 logger.error(f"Error sending queued message: {str(e)}")
@@ -246,7 +246,7 @@ class ConnectionManager:
         
         # 广播给所有连接
         for connection in list(self.active_connections):
-        try:
+try:
                 await connection.send_json(data)
             except Exception as e:
                 logger.error(f"Error broadcasting message: {str(e)}")
@@ -258,7 +258,7 @@ manager = ConnectionManager()
 # 自定义日志处理器
 class WebSocketLogHandler(logging.Handler):
     def emit(self, record):
-        try:
+try:
             msg = self.format(record)
             # 使用 asyncio.create_task 在事件循环中运行广播
             loop = asyncio.get_event_loop()
@@ -270,7 +270,7 @@ class WebSocketLogHandler(logging.Handler):
                 asyncio.run(
                     manager.broadcast(msg, record.levelname.lower())
                 )
-        except Exception as e:
+    except Exception as e:
             print(f"Error in WebSocketLogHandler: {str(e)}")
 
 # 添加WebSocket日志处理器
@@ -302,10 +302,10 @@ def add_log(message: str, level: str = "info"):
 # 自定义日志处理器
 class BufferLogHandler(logging.Handler):
     def emit(self, record):
-        try:
+try:
             msg = self.format(record)
             add_log(msg, record.levelname.lower())
-        except Exception as e:
+    except Exception as e:
             print(f"Error in BufferLogHandler: {str(e)}")
 
 # 添加缓冲日志处理器
@@ -325,7 +325,7 @@ async def get_logs(since: int = 0):
 @app.on_event("startup")
 async def startup_event():
     """应用程序启动时的事件处理"""
-        try:
+try:
         logger.info("应用程序启动")
         logger.info("正在初始化 Redis 连接...")
         global redis
@@ -367,7 +367,7 @@ async def monitor_system_resources():
             "message": "系统资源监控功能未启用（psutil 模块不可用）"
         }
     
-        try:
+try:
         process = psutil.Process(os.getpid())
         return {
             "status": "success",
@@ -385,7 +385,7 @@ async def monitor_system_resources():
 @app.post("/api/process")
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     """处理文件上传"""
-        try:
+try:
         logger.info(f"开始处理文件上传: order_file={order_file.filename}, schedule_file={schedule_file.filename}")
         logger.debug(f"环境变量检查: REDIS_URL={bool(UPSTASH_REDIS_REST_URL)}, REDIS_TOKEN={bool(UPSTASH_REDIS_REST_TOKEN)}")
         
@@ -407,7 +407,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             )
 
         # 读取文件内容
-        try:
+try:
             logger.debug("开始读取订单文件...")
             order_data = await order_file.read()
             logger.info(f"订单文件读取完成，大小: {len(order_data)} bytes")
@@ -415,7 +415,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             logger.debug("开始读取排班表文件...")
             schedule_data = await schedule_file.read()
             logger.info(f"排班表文件读取完成，大小: {len(schedule_data)} bytes")
-        except Exception as e:
+    except Exception as e:
             logger.error(f"文件读取失败: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
@@ -432,7 +432,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
                 content={"error": "文件过大：请确保每个文件小于100MB"}
             )
 
-        try:
+try:
             # 创建任务ID并初始化状态
             task_id = str(uuid.uuid4())
             logger.info(f"创建新任务: task_id={task_id}")
@@ -461,7 +461,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
                 }
             )
 
-        except Exception as e:
+    except Exception as e:
             logger.error(f"任务创建失败: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
@@ -480,7 +480,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 @app.get("/api/status/{task_id}")
 async def get_task_status_endpoint(task_id: str):
     """获取任务处理状态"""
-        try:
+try:
         print(f"正在获取任务状态: {task_id}")
         
         status = await get_task_status(task_id)
@@ -565,7 +565,7 @@ async def cancel_task(task_id: str):
         task = running_tasks[task_id]
         if not task.done():
             task.cancel()
-        try:
+try:
                 await task
             except asyncio.CancelledError:
                 print(f"[DEBUG] 任务 {task_id} 已取消")
@@ -582,7 +582,7 @@ async def cancel_task(task_id: str):
 @app.post("/api/cancel/{task_id}")
 async def cancel_task_endpoint(task_id: str):
     """终止任务的API端点"""
-        try:
+try:
         if await cancel_task(task_id):
             return JSONResponse(content={"message": "任务已终止"})
         else:
@@ -599,7 +599,7 @@ async def cancel_task_endpoint(task_id: str):
 
 async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
     """后台处理数据的异步函数"""
-        try:
+try:
         # 将任务添加到运行中的任务字典
         task = asyncio.current_task()
         running_tasks[task_id] = task
@@ -615,7 +615,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             "message": "开始处理数据..."
         })
         
-        try:
+try:
             # 读取订单数据
             logger.info("正在读取订单数据...")
             order_buffer = BytesIO(order_data)
@@ -681,7 +681,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
                 })
                 
                 # 处理数据块
-        try:
+try:
                     # 在这里添加你的数据处理逻辑
                     processed_chunk = chunk  # 替换为实际的处理逻辑
                     processed_chunks.append(processed_chunk)
@@ -722,7 +722,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             
             logger.info(f"任务 {task_id} 处理完成")
             
-        except Exception as e:
+    except Exception as e:
             logger.error(f"处理数据时出错: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             raise
@@ -747,7 +747,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
 @app.get("/api/test-redis")
 async def test_redis_connection():
     """测试 Redis 连接"""
-        try:
+try:
         redis_client = get_redis_client()
         
         # 测试基本操作
@@ -800,7 +800,7 @@ async def test_redis_connection():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 连接处理"""
     await manager.connect(websocket)
-        try:
+try:
         while True:
             # 保持连接活跃
             await websocket.receive_text()
