@@ -907,7 +907,7 @@ async def test_redis_connection():
             }
         )
 
-@app.websocket("/api/ws/logs")
+@app.websocket("/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 连接处理"""
     await manager.connect(websocket)

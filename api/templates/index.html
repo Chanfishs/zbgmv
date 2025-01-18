@@ -206,7 +206,7 @@
         // WebSocket 连接
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/api/ws/logs`);
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws/logs`);
             
             ws.onopen = function() {
                 addLogEntry("WebSocket 连接已建立", "info");
@@ -223,7 +223,8 @@
             };
 
             ws.onerror = function(error) {
-                addLogEntry(`WebSocket 错误: ${error.message}`, "error");
+                console.error('WebSocket 错误:', error);
+                addLogEntry("WebSocket 连接错误，正在重试...", "error");
             };
         }
 
