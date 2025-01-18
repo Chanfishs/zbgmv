@@ -185,46 +185,65 @@ async def set_task_status(task_id: str, status: Dict[str, Any]) -> bool:
 
 @app.post("/api/process")
 async def process_files(
+    request: Request,
     order_file: UploadFile = File(...),
     schedule_file: UploadFile = File(...),
 ):
     """处理上传的文件"""
     try:
-        # 验证文件大小
-        if await order_file.seek(0, 2) > 100 * 1024 * 1024:  # 100MB
-            raise HTTPException(status_code=400, detail="订单文件大小超过限制")
-        if await schedule_file.seek(0, 2) > 100 * 1024 * 1024:  # 100MB
-            raise HTTPException(status_code=400, detail="排班表文件大小超过限制")
+        # 1. 首先通过 Content-Length 快速判断文件大小
+        content_length = request.headers.get('content-length')
+        if content_length and int(content_length) > 200 * 1024 * 1024:  # 200MB (两个文件总和)
+            raise HTTPException(status_code=413, detail="上传文件总大小超过限制")
             
-        # 重置文件指针
-        await order_file.seek(0)
-        await schedule_file.seek(0)
-        
-        # 验证文件扩展名
+        # 2. 验证文件扩展名
         if not order_file.filename.endswith('.xlsx'):
             raise HTTPException(status_code=400, detail="订单文件必须是 Excel 文件(.xlsx)")
         if not schedule_file.filename.endswith('.xlsx'):
             raise HTTPException(status_code=400, detail="排班表必须是 Excel 文件(.xlsx)")
             
-        # 生成任务ID
+        # 3. 生成任务ID
         task_id = str(uuid.uuid4())
+        logger.info(f"开始处理任务 {task_id}")
         
-        # 保存文件到临时目录
+        # 4. 保存文件到临时目录
         order_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
         schedule_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
         
         try:
-            # 写入文件内容
-            order_content = await order_file.read()
-            schedule_content = await schedule_file.read()
+            # 5. 分块读取并写入文件
+            max_size = 100 * 1024 * 1024  # 单个文件最大 100MB
+            chunk_size = 1024 * 1024  # 每次读取 1MB
             
-            order_temp.write(order_content)
-            schedule_temp.write(schedule_content)
-            
+            # 处理订单文件
+            uploaded_size = 0
+            while True:
+                chunk = await order_file.read(chunk_size)
+                if not chunk:
+                    break
+                uploaded_size += len(chunk)
+                if uploaded_size > max_size:
+                    raise HTTPException(status_code=413, detail="订单文件大小超过限制")
+                order_temp.write(chunk)
+                
+            # 处理排班表文件
+            uploaded_size = 0
+            while True:
+                chunk = await schedule_file.read(chunk_size)
+                if not chunk:
+                    break
+                uploaded_size += len(chunk)
+                if uploaded_size > max_size:
+                    raise HTTPException(status_code=413, detail="排班表文件大小超过限制")
+                schedule_temp.write(chunk)
+                
+            # 关闭文件
             order_temp.close()
             schedule_temp.close()
             
-            # 初始化任务状态
+            logger.info(f"文件上传完成: order_file={order_file.filename}, schedule_file={schedule_file.filename}")
+            
+            # 6. 初始化任务状态
             await set_task_status(task_id, {
                 'status': 'processing',
                 'progress': 0,
@@ -232,14 +251,14 @@ async def process_files(
                 'start_time': datetime.now().isoformat()
             })
             
-            # 启动后台处理
+            # 7. 启动后台处理
             asyncio.create_task(process_data_in_background(
                 task_id=task_id,
                 order_file_path=order_temp.name,
                 schedule_file_path=schedule_temp.name
             ))
             
-            # 立即返回任务ID
+            # 8. 立即返回任务ID
             return {"task_id": task_id}
             
         except Exception as e:
@@ -251,6 +270,8 @@ async def process_files(
                 pass
             raise HTTPException(status_code=500, detail=f"文件处理失败: {str(e)}")
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"文件上传失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")
