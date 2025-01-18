@@ -632,14 +632,22 @@ def clean_and_parse_dates(df: pd.DataFrame) -> pd.DataFrame:
         df['订单提交日期'] = df['订单提交日期'].astype(str).str.strip()
         df['订单提交时间'] = df['订单提交时间'].astype(str).str.strip()
         
-        # 尝试解析日期时间,并统一移除时区信息
+        # 尝试解析日期时间,使用四位年份格式
         df['订单提交时间'] = pd.to_datetime(
             df['订单提交日期'] + ' ' + df['订单提交时间'],
-            format='%Y-%m-%d %H:%M:%S',
+            format='%Y-%m-%d %H:%M:%S',  # 使用大写Y匹配四位年份
             errors='coerce'
         ).dt.tz_localize(None)  # 确保时间是 tz-naive
         
-        # 删除无效的日期行
+        # 记录并删除无效的日期行
+        invalid_dates = df['订单提交时间'].isna()
+        if invalid_dates.any():
+            invalid_examples = df[invalid_dates][['订单提交日期', '订单提交时间']].head()
+            logger.warning(
+                f"发现 {invalid_dates.sum()} 条无效日期记录，示例:\n"
+                f"{invalid_examples.to_string()}"
+            )
+            
         df.dropna(subset=['订单提交时间'], inplace=True)
         
         return df
@@ -657,10 +665,19 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
         chunk_df['订单提交时间'] = pd.to_datetime(
             chunk_df['订单提交日期'].astype(str) + ' ' + 
             chunk_df['订单提交时间'].astype(str),
+            format='%Y-%m-%d %H:%M:%S',  # 使用大写Y匹配四位年份
             errors='coerce'
         ).dt.tz_localize(None)  # 确保时间是 tz-naive
         
-        # 删除无效时间的记录
+        # 记录并删除无效时间的记录
+        invalid_times = chunk_df['订单提交时间'].isna()
+        if invalid_times.any():
+            invalid_examples = chunk_df[invalid_times][['订单提交日期', '订单提交时间']].head()
+            logger.warning(
+                f"订单数据中发现 {invalid_times.sum()} 条无效时间记录，示例:\n"
+                f"{invalid_examples.to_string()}"
+            )
+            
         chunk_df = chunk_df.dropna(subset=['订单提交时间'])
         
         # 2. 匹配订单与排班
@@ -676,7 +693,7 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
                     '商品名称': order['选购商品'],
                     '订单金额': order['订单应付金额'],
                     '订单状态': order['订单状态'],
-                    '提交时间': order['订单提交时间'],
+                    '提交时间': order['订单提交时间'].strftime('%Y-%m-%d %H:%M:%S'),  # 格式化输出时间
                     '主播': matched_schedule['主播姓名'],
                     '场控': matched_schedule['场控姓名'],
                     '直播时段': f"{matched_schedule['上播时间'].strftime('%Y-%m-%d %H:%M:%S')} - {matched_schedule['下播时间'].strftime('%Y-%m-%d %H:%M:%S')}",
@@ -700,16 +717,26 @@ def find_matching_schedule(order: pd.Series, schedule_df: pd.DataFrame) -> Optio
         schedule_df['上播时间'] = pd.to_datetime(
             schedule_df['日期'].astype(str) + ' ' + 
             schedule_df['上播时间'].astype(str),
+            format='%Y-%m-%d %H:%M:%S',  # 使用大写Y匹配四位年份
             errors='coerce'
         ).dt.tz_localize(None)  # 确保时间是 tz-naive
         
         schedule_df['下播时间'] = pd.to_datetime(
             schedule_df['日期'].astype(str) + ' ' + 
             schedule_df['下播时间'].astype(str),
+            format='%Y-%m-%d %H:%M:%S',  # 使用大写Y匹配四位年份
             errors='coerce'
         ).dt.tz_localize(None)  # 确保时间是 tz-naive
         
-        # 删除无效的时间记录
+        # 记录并删除无效的时间记录
+        invalid_times = schedule_df[['上播时间', '下播时间']].isna().any(axis=1)
+        if invalid_times.any():
+            invalid_examples = schedule_df[invalid_times][['日期', '上播时间', '下播时间']].head()
+            logger.warning(
+                f"排班表中发现 {invalid_times.sum()} 条无效时间记录，示例:\n"
+                f"{invalid_examples.to_string()}"
+            )
+            
         schedule_df = schedule_df.dropna(subset=['上播时间', '下播时间'])
         
         # 查找订单时间在直播时段内的记录
@@ -720,6 +747,12 @@ def find_matching_schedule(order: pd.Series, schedule_df: pd.DataFrame) -> Optio
         
         if not matched.empty:
             return matched.iloc[0]
+            
+        # 如果没有匹配记录,记录详细日志
+        logger.warning(
+            f"订单时间 {order_time} 未找到匹配的排班记录\n"
+            f"订单信息: {order.to_string()}"
+        )
         return None
         
     except Exception as e:
