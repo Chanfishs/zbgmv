@@ -249,10 +249,35 @@
             resetUI();
             
             const formData = new FormData(this);
+            const orderFile = formData.get('order_file');
+            const scheduleFile = formData.get('schedule_file');
+
+            // 验证文件是否选择
+            if (!orderFile || !scheduleFile) {
+                addLogEntry("请选择要上传的文件", "error");
+                return;
+            }
+
+            // 验证文件类型
+            if (!orderFile.name.toLowerCase().endsWith('.xlsx') || !scheduleFile.name.toLowerCase().endsWith('.xlsx')) {
+                addLogEntry("请选择 .xlsx 格式的文件", "error");
+                return;
+            }
+
+            // 验证文件大小
+            const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+            if (orderFile.size > MAX_FILE_SIZE || scheduleFile.size > MAX_FILE_SIZE) {
+                addLogEntry("文件大小不能超过 100MB", "error");
+                return;
+            }
+
             document.getElementById('progressContainer').style.display = 'block';
             
             try {
                 addLogEntry("开始上传文件...", "info");
+                addLogEntry(`订单文件: ${orderFile.name} (${formatFileSize(orderFile.size)})`, "info");
+                addLogEntry(`排班表文件: ${scheduleFile.name} (${formatFileSize(scheduleFile.size)})`, "info");
+
                 const response = await fetch('/api/process', {
                     method: 'POST',
                     body: formData
@@ -273,6 +298,25 @@
                 resetUI();
             }
         };
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // 添加文件选择事件监听器
+        document.querySelectorAll('input[type="file"]').forEach(input => {
+            input.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    addLogEntry(`已选择文件: ${file.name} (${formatFileSize(file.size)})`, "info");
+                }
+            });
+        });
 
         // 页面加载完成后连接WebSocket
         window.addEventListener('load', function() {
