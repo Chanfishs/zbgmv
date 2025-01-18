@@ -5,10 +5,11 @@ import json
 import logging
 import traceback
 from typing import Optional, Dict, Any
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Request
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from redis import Redis
 import pandas as pd
 import numpy as np
@@ -26,6 +27,9 @@ UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 # 创建 FastAPI 应用
 app = FastAPI()
+
+# 配置模板
+templates = Jinja2Templates(directory="api/templates")
 
 # 添加静态文件服务
 app.mount("/static", StaticFiles(directory="api/static"), name="static")
@@ -220,3 +224,8 @@ async def get_task_status_endpoint(task_id: str):
                 "progress": 0
             }
         )
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """根路由处理"""
+    return templates.TemplateResponse("index.html", {"request": request})
