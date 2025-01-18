@@ -10,4 +10,5 @@ psutil==5.9.6
 upstash-redis==1.0.0
 python-jose==3.3.0
 websockets==12.0
-starlette==0.27.0 
+starlette==0.27.0
+redis==5.0.1 
