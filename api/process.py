@@ -4,9 +4,9 @@ import time
 import json
 import logging
 import traceback
-from typing import Optional, Dict, Any, List
-from datetime import datetime  # 直接导入 datetime 类
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Request, WebSocket, HTTPException
+from typing import Optional, Dict, Any, List, Tuple
+from datetime import datetime
+from fastapi import FastAPI, File, UploadFile, Request, WebSocket, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,7 @@ import base64
 import asyncio
 import tempfile
 import gc
+import openpyxl
 
 # 配置日志
 logging.basicConfig(
@@ -430,7 +431,7 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'status': 'processing',
             'progress': 0,
             'message': '开始处理文件...',
-            'start_time': datetime.now().isoformat()  # 使用导入的 datetime 类
+            'start_time': datetime.now().isoformat()
         })
 
         # 1. 首先验证文件格式
@@ -457,74 +458,84 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
         if not all(col in schedule_df.columns for col in required_schedule_columns):
             raise ValueError('排班表缺少必需的列')
 
-        # 2. 分块读取订单数据
+        # 2. 读取排班数据(排班数据通常较小,一次性读取)
         await set_task_status(task_id, {
             'status': 'processing',
             'progress': 10,
-            'message': '开始读取订单数据...'
-        })
-        
-        chunk_size = 1000  # 每次处理1000行
-        order_chunks = []
-        
-        for chunk_idx, chunk in enumerate(pd.read_excel(order_file_path, chunksize=chunk_size)):
-            order_chunks.append(chunk)
-            progress = 10 + int((chunk_idx + 1) * 20 / len(order_chunks))  # 读取订单占20%进度
-            await set_task_status(task_id, {
-                'status': 'processing',
-                'progress': progress,
-                'message': f'已读取 {(chunk_idx + 1) * chunk_size} 条订单数据...'
-            })
-            # 释放内存
-            gc.collect()
-            await asyncio.sleep(0.1)  # 让出控制权
-            
-        # 3. 读取排班数据
-        await set_task_status(task_id, {
-            'status': 'processing',
-            'progress': 30,
             'message': '读取排班数据...'
         })
         
         schedule_df = pd.read_excel(schedule_file_path)
         
-        # 4. 数据处理和匹配
+        # 3. 分块读取和处理订单数据
         await set_task_status(task_id, {
             'status': 'processing',
-            'progress': 40,
-            'message': '开始处理数据...'
+            'progress': 20,
+            'message': '开始处理订单数据...'
         })
         
-        processed_chunks = []
-        total_chunks = len(order_chunks)
+        # 使用 openpyxl 分块读取订单文件
+        wb = openpyxl.load_workbook(filename=order_file_path, read_only=True)
+        ws = wb.active
         
-        for idx, chunk in enumerate(order_chunks):
-            # 处理每个分块
-            processed_chunk = process_chunk(chunk, schedule_df)
-            processed_chunks.append(processed_chunk)
+        # 获取总行数和列名
+        total_rows = ws.max_row - 1  # 减去表头
+        headers = [cell.value for cell in next(ws.rows)]
+        
+        chunk_size = 1000
+        rows_buffer = []
+        processed_chunks = []
+        current_row = 0
+        
+        # 跳过表头
+        next(ws.rows)
+        
+        # 分块处理数据
+        for row in ws.rows:
+            current_row += 1
+            rows_buffer.append([cell.value for cell in row])
             
-            progress = 40 + int((idx + 1) * 40 / total_chunks)  # 处理过程占40%进度
-            await set_task_status(task_id, {
-                'status': 'processing',
-                'progress': progress,
-                'message': f'正在处理第 {idx + 1}/{total_chunks} 块数据...'
-            })
-            
-            # 释放内存
-            del chunk
-            gc.collect()
-            await asyncio.sleep(0.1)  # 让出控制权
-            
-        # 5. 合并结果
+            # 当收集到一定数量的行,就处理
+            if len(rows_buffer) >= chunk_size:
+                # 转换为 DataFrame 并处理
+                chunk_df = pd.DataFrame(rows_buffer, columns=headers)
+                processed_chunk = process_chunk(chunk_df, schedule_df)
+                if not processed_chunk.empty:
+                    processed_chunks.append(processed_chunk)
+                
+                # 更新进度
+                progress = 20 + int(current_row * 60 / total_rows)  # 处理过程占60%进度
+                await set_task_status(task_id, {
+                    'status': 'processing',
+                    'progress': progress,
+                    'message': f'已处理 {current_row}/{total_rows} 条订单...'
+                })
+                
+                # 清理内存
+                rows_buffer = []
+                gc.collect()
+                await asyncio.sleep(0.1)  # 让出控制权
+        
+        # 处理剩余的数据
+        if rows_buffer:
+            chunk_df = pd.DataFrame(rows_buffer, columns=headers)
+            processed_chunk = process_chunk(chunk_df, schedule_df)
+            if not processed_chunk.empty:
+                processed_chunks.append(processed_chunk)
+        
+        # 关闭工作簿
+        wb.close()
+        
+        # 4. 合并结果
         await set_task_status(task_id, {
             'status': 'processing',
             'progress': 80,
             'message': '合并处理结果...'
         })
         
-        final_df = pd.concat(processed_chunks, ignore_index=True)
+        final_df = pd.concat(processed_chunks, ignore_index=True) if processed_chunks else pd.DataFrame()
         
-        # 6. 生成结果文件
+        # 5. 生成结果文件
         await set_task_status(task_id, {
             'status': 'processing',
             'progress': 90,
@@ -542,12 +553,12 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             # 删除临时文件
             os.unlink(tmp_file.name)
         
-        # 7. 更新任务状态为完成
+        # 6. 更新任务状态为完成
         await set_task_status(task_id, {
             'status': 'completed',
             'progress': 100,
             'message': '处理完成',
-            'completion_time': datetime.now().isoformat(),  # 使用导入的 datetime 类
+            'completion_time': datetime.now().isoformat(),
             'result': base64.b64encode(result_data).decode('utf-8')
         })
         
@@ -558,7 +569,7 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'status': 'failed',
             'progress': 0,
             'message': f'处理失败: {str(e)}',
-            'failure_time': datetime.now().isoformat()  # 使用导入的 datetime 类
+            'failure_time': datetime.now().isoformat()
         })
         # 清理临时文件
         try:
@@ -566,10 +577,13 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             os.unlink(schedule_file_path)
         except:
             pass
-
+            
 def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataFrame:
     """处理单个数据块的函数"""
     try:
+        if chunk_df.empty:
+            return pd.DataFrame()
+            
         # 1. 数据清洗
         chunk_df['订单提交时间'] = pd.to_datetime(
             chunk_df['订单提交日期'].astype(str) + ' ' + 
@@ -601,7 +615,7 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
         
     except Exception as e:
         logger.error(f"处理数据块时出错: {str(e)}", exc_info=True)
-        raise
+        return pd.DataFrame()  # 返回空 DataFrame 而不是抛出异常
 
 def find_matching_schedule(order: pd.Series, schedule_df: pd.DataFrame) -> Optional[pd.Series]:
     """查找订单对应的排班记录"""
