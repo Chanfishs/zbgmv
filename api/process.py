@@ -13,6 +13,8 @@ from fastapi.templating import Jinja2Templates
 from redis import Redis
 import pandas as pd
 import numpy as np
+import io
+import base64
 
 # 配置日志
 logging.basicConfig(
@@ -116,10 +118,16 @@ def get_redis_client() -> Optional[Redis]:
         if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
             raise ValueError("Redis 配置缺失")
             
+        # 从 URL 中提取主机名
+        from urllib.parse import urlparse
+        parsed_url = urlparse(UPSTASH_REDIS_REST_URL)
+        hostname = parsed_url.hostname
+        
         redis_client = Redis(
-            host=UPSTASH_REDIS_REST_URL,
-            port=6379,
+            host=hostname,  # 使用解析后的主机名
+            port=parsed_url.port or 6379,  # 使用 URL 中的端口或默认端口
             password=UPSTASH_REDIS_REST_TOKEN,
+            ssl=True,  # 启用 SSL
             decode_responses=True
         )
         
@@ -322,3 +330,76 @@ async def get_logs(since: int = 0):
             status_code=500,
             content={"error": f"获取日志失败：{str(e)}"}
         )
+
+async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
+    """后台处理数据"""
+    try:
+        # 更新任务状态为处理中
+        await set_task_status(task_id, {
+            "status": TASK_STATUS_PROCESSING,
+            "progress": 10,
+            "message": "正在读取文件数据..."
+        })
+
+        # 读取 Excel 文件数据
+        try:
+            order_df = pd.read_excel(io.BytesIO(order_data))
+            schedule_df = pd.read_excel(io.BytesIO(schedule_data))
+            
+            await set_task_status(task_id, {
+                "status": TASK_STATUS_PROCESSING,
+                "progress": 30,
+                "message": "文件读取完成，正在处理数据..."
+            })
+        except Exception as e:
+            logger.error(f"Excel 文件读取失败: {str(e)}")
+            await set_task_status(task_id, {
+                "status": TASK_STATUS_FAILED,
+                "message": f"Excel 文件读取失败：{str(e)}",
+                "end_time": time.time()
+            })
+            return
+
+        # 数据处理逻辑
+        try:
+            # TODO: 在这里添加具体的数据处理逻辑
+            # 示例：简单的数据合并
+            result_df = pd.DataFrame({
+                "处理时间": pd.Timestamp.now(),
+                "订单数量": len(order_df),
+                "排班数量": len(schedule_df)
+            }, index=[0])
+            
+            # 将结果保存为 Excel
+            output = io.BytesIO()
+            result_df.to_excel(output, index=False)
+            result_base64 = base64.b64encode(output.getvalue()).decode()
+            
+            # 更新任务状态为完成
+            await set_task_status(task_id, {
+                "status": TASK_STATUS_COMPLETED,
+                "progress": 100,
+                "message": "处理完成",
+                "result": result_base64,
+                "end_time": time.time()
+            })
+            
+        except Exception as e:
+            logger.error(f"数据处理失败: {str(e)}")
+            await set_task_status(task_id, {
+                "status": TASK_STATUS_FAILED,
+                "message": f"数据处理失败：{str(e)}",
+                "end_time": time.time()
+            })
+            return
+            
+    except Exception as e:
+        logger.error(f"后台处理失败: {str(e)}")
+        try:
+            await set_task_status(task_id, {
+                "status": TASK_STATUS_FAILED,
+                "message": f"后台处理失败：{str(e)}",
+                "end_time": time.time()
+            })
+        except:
+            pass
