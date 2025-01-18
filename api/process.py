@@ -632,12 +632,12 @@ def clean_and_parse_dates(df: pd.DataFrame) -> pd.DataFrame:
         df['订单提交日期'] = df['订单提交日期'].astype(str).str.strip()
         df['订单提交时间'] = df['订单提交时间'].astype(str).str.strip()
         
-        # 尝试解析日期时间
+        # 尝试解析日期时间,并统一移除时区信息
         df['订单提交时间'] = pd.to_datetime(
             df['订单提交日期'] + ' ' + df['订单提交时间'],
             format='%Y-%m-%d %H:%M:%S',
             errors='coerce'
-        )
+        ).dt.tz_localize(None)  # 确保时间是 tz-naive
         
         # 删除无效的日期行
         df.dropna(subset=['订单提交时间'], inplace=True)
@@ -653,17 +653,21 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
         if chunk_df.empty:
             return pd.DataFrame()
             
-        # 1. 数据清洗
+        # 1. 数据清洗和时间转换
         chunk_df['订单提交时间'] = pd.to_datetime(
             chunk_df['订单提交日期'].astype(str) + ' ' + 
-            chunk_df['订单提交时间'].astype(str)
-        )
+            chunk_df['订单提交时间'].astype(str),
+            errors='coerce'
+        ).dt.tz_localize(None)  # 确保时间是 tz-naive
+        
+        # 删除无效时间的记录
+        chunk_df = chunk_df.dropna(subset=['订单提交时间'])
         
         # 2. 匹配订单与排班
         results = []
         for _, order in chunk_df.iterrows():
             # 查找对应的排班记录
-            matched_schedule = find_matching_schedule(order, schedule_df)
+            matched_schedule = find_matching_schedule(order, schedule_df.copy())
             if matched_schedule is not None:
                 result_row = {
                     '订单编号': order['主订单编号'],
@@ -675,7 +679,7 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
                     '提交时间': order['订单提交时间'],
                     '主播': matched_schedule['主播姓名'],
                     '场控': matched_schedule['场控姓名'],
-                    '直播时段': f"{matched_schedule['上播时间']} - {matched_schedule['下播时间']}",
+                    '直播时段': f"{matched_schedule['上播时间'].strftime('%Y-%m-%d %H:%M:%S')} - {matched_schedule['下播时间'].strftime('%Y-%m-%d %H:%M:%S')}",
                     '时段消耗': matched_schedule['时段消耗']
                 }
                 results.append(result_row)
@@ -689,17 +693,24 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
 def find_matching_schedule(order: pd.Series, schedule_df: pd.DataFrame) -> Optional[pd.Series]:
     """查找订单对应的排班记录"""
     try:
-        order_time = order['订单提交时间']
+        # 确保订单时间是 tz-naive
+        order_time = pd.to_datetime(order['订单提交时间']).tz_localize(None)
         
-        # 转换排班表的时间
+        # 转换排班表的时间并统一移除时区信息
         schedule_df['上播时间'] = pd.to_datetime(
             schedule_df['日期'].astype(str) + ' ' + 
-            schedule_df['上播时间'].astype(str)
-        )
+            schedule_df['上播时间'].astype(str),
+            errors='coerce'
+        ).dt.tz_localize(None)  # 确保时间是 tz-naive
+        
         schedule_df['下播时间'] = pd.to_datetime(
             schedule_df['日期'].astype(str) + ' ' + 
-            schedule_df['下播时间'].astype(str)
-        )
+            schedule_df['下播时间'].astype(str),
+            errors='coerce'
+        ).dt.tz_localize(None)  # 确保时间是 tz-naive
+        
+        # 删除无效的时间记录
+        schedule_df = schedule_df.dropna(subset=['上播时间', '下播时间'])
         
         # 查找订单时间在直播时段内的记录
         matched = schedule_df[
