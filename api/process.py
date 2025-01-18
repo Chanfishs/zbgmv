@@ -4,8 +4,8 @@ import time
 import json
 import logging
 import traceback
-from typing import Optional, Dict, Any
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Request
+from typing import Optional, Dict, Any, List
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Request, WebSocket
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -21,12 +21,73 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 内存中存储日志
+log_buffer = []
+log_id_counter = 0
+
+class BufferLogHandler(logging.Handler):
+    def emit(self, record):
+        global log_id_counter
+        log_id_counter += 1
+        log_entry = {
+            "id": log_id_counter,
+            "level": record.levelname.lower(),
+            "message": self.format(record),
+            "timestamp": time.time()
+        }
+        log_buffer.append(log_entry)
+        # 保持最多1000条日志
+        if len(log_buffer) > 1000:
+            log_buffer.pop(0)
+
+# 添加自定义日志处理器
+logger.addHandler(BufferLogHandler())
+
 # Redis 配置
 UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 # 创建 FastAPI 应用
 app = FastAPI()
+
+# WebSocket 连接管理
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"WebSocket 连接建立，当前连接数: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+        logger.info(f"WebSocket 连接断开，当前连接数: {len(self.active_connections)}")
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception as e:
+                logger.error(f"广播消息失败: {str(e)}")
+                await self.disconnect(connection)
+
+manager = ConnectionManager()
+
+class WebSocketLogHandler(logging.Handler):
+    async def emit(self, record):
+        try:
+            log_entry = {
+                "level": record.levelname.lower(),
+                "message": self.format(record)
+            }
+            await manager.broadcast(json.dumps(log_entry))
+        except Exception as e:
+            print(f"WebSocket 日志发送失败: {str(e)}")
+
+# 添加 WebSocket 日志处理器
+websocket_handler = WebSocketLogHandler()
+logger.addHandler(websocket_handler)
 
 # 配置模板
 templates = Jinja2Templates(directory="api/templates")
@@ -229,3 +290,35 @@ async def get_task_status_endpoint(task_id: str):
 async def root(request: Request):
     """根路由处理"""
     return templates.TemplateResponse("index.html", {"request": request})
+
+@app.websocket("/api/ws/logs")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket 连接处理"""
+    try:
+        await manager.connect(websocket)
+        while True:
+            try:
+                # 保持连接活跃
+                data = await websocket.receive_text()
+                # 可以在这里处理接收到的消息
+            except Exception as e:
+                logger.error(f"WebSocket 接收消息失败: {str(e)}")
+                break
+    except Exception as e:
+        logger.error(f"WebSocket 连接错误: {str(e)}")
+    finally:
+        manager.disconnect(websocket)
+
+@app.get("/api/logs")
+async def get_logs(since: int = 0):
+    """获取日志"""
+    try:
+        # 返回ID大于since的所有日志
+        logs = [log for log in log_buffer if log["id"] > since]
+        return JSONResponse(content=logs)
+    except Exception as e:
+        logger.error(f"获取日志失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"获取日志失败：{str(e)}"}
+        )
