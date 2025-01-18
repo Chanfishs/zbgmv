@@ -3,210 +3,477 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>主播业绩统计系统</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <title>Excel 数据处理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .upload-form {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        .file-input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .file-input-label {
-            font-weight: bold;
-            color: #555;
-        }
-        .file-input {
-            padding: 10px;
-            border: 2px dashed #ddd;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        .file-input:hover {
-            border-color: #4CAF50;
-        }
-        .file-info {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 5px;
-        }
-        .submit-btn {
-            padding: 12px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background-color 0.3s ease;
-        }
-        .submit-btn:hover {
-            background-color: #45a049;
-        }
-        .submit-btn:disabled {
-            background-color: #cccccc;
-            cursor: not-allowed;
-        }
-        .log-container {
-            margin-top: 20px;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            height: 300px;
-            overflow-y: auto;
-        }
-        .log-entry {
-            margin: 5px 0;
-            padding: 5px;
-            border-bottom: 1px solid #eee;
-            font-family: monospace;
-        }
-        .log-info { color: #0066cc; }
-        .log-error { color: #dc3545; }
-        .log-warning { color: #ffc107; }
-        .progress-container {
-            margin-top: 20px;
-            display: none;
-        }
-        .progress-bar {
-            width: 100%;
-            height: 20px;
-            background-color: #f0f0f0;
-            border-radius: 10px;
+        .file-upload {
+            position: relative;
             overflow: hidden;
         }
-        .progress {
-            width: 0%;
-            height: 100%;
-            background-color: #4CAF50;
-            transition: width 0.3s ease;
+        .file-upload input[type=file] {
+            position: absolute;
+            font-size: 100px;
+            right: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
         }
-        .status-text {
-            margin-top: 10px;
-            text-align: center;
-            color: #666;
+        .progress-bar-animated {
+            transition: width 0.6s ease;
         }
         .error-message {
-            color: #dc3545;
-            margin-top: 5px;
-            font-size: 0.9em;
+            color: #dc2626;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 0.375rem;
+            background-color: #fee2e2;
+            border: 1px solid #fecaca;
+        }
+        .success-message {
+            color: #059669;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 0.375rem;
+            background-color: #d1fae5;
+            border: 1px solid #a7f3d0;
+        }
+        .drag-drop-zone {
+            border: 2px dashed #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        .drag-drop-zone.drag-over {
+            border-color: #60a5fa;
+            background-color: #eff6ff;
+        }
+        #logWindow {
+            background-color: #1a1a1a;
+            border: 1px solid #333;
+            font-family: 'Courier New', monospace;
+            transition: all 0.3s ease;
+        }
+        
+        #logWindow::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        #logWindow::-webkit-scrollbar-track {
+            background: #333;
+        }
+        
+        #logWindow::-webkit-scrollbar-thumb {
+            background: #666;
+            border-radius: 4px;
+        }
+        
+        .log-debug { color: #98c379; }
+        .log-info { color: #61afef; }
+        .log-warning { color: #e5c07b; }
+        .log-error { color: #e06c75; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .log-entry {
+            animation: fadeIn 0.3s ease-out forwards;
+            padding: 2px 0;
+            border-bottom: 1px solid #333;
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>主播业绩统计系统</h1>
-        <form id="uploadForm" class="upload-form" enctype="multipart/form-data">
-            <div class="file-input-group">
-                <label class="file-input-label">订单文件：</label>
-                <input type="file" name="order_file" accept=".xlsx" class="file-input" required>
-                <div class="file-info" id="orderFileInfo"></div>
-                <div class="error-message" id="orderFileError"></div>
+<body class="bg-gray-50">
+    <div class="min-h-screen py-8">
+        <div class="container mx-auto px-4">
+            <div class="max-w-3xl mx-auto">
+                <!-- 头部 -->
+                <div class="text-center mb-8">
+                    <h1 class="text-4xl font-bold text-gray-900 mb-2">Excel 数据处理系统</h1>
+                    <p class="text-gray-600">自动处理订单数据和排班表，生成业绩统计报表</p>
+                </div>
+
+                <!-- 错误提示 -->
+                {% if error %}
+                <div class="error-message mb-4" role="alert">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <!-- 日志显示窗口 -->
+                <div class="mb-8">
+                    <h2 class="text-xl font-semibold mb-2">系统日志</h2>
+                    <div id="logWindow" class="bg-black text-green-400 p-4 rounded-lg h-96 overflow-y-auto font-mono text-sm">
+                        <pre id="logContent" class="whitespace-pre-wrap"></pre>
+                    </div>
+                </div>
+
+                <!-- 主要内容区 -->
+                <div class="bg-white rounded-xl shadow-lg p-8 mb-8">
+                    <div class="mb-8">
+                        <h2 class="text-2xl font-semibold text-gray-800 mb-6">文件上传</h2>
+                        <form id="uploadForm" class="space-y-6" enctype="multipart/form-data">
+                            <!-- 订单数据文件上传 -->
+                            <div class="file-upload-container">
+                                <div class="drag-drop-zone" id="orderDropZone">
+                                    <label class="block">
+                                        <span class="text-gray-700">订单数据文件</span>
+                                        <input type="file" 
+                                               name="order_file" 
+                                               id="orderFile" 
+                                               accept=".xlsx"
+                                               class="hidden"
+                                               onchange="handleFileSelect(this, 'orderFileName')" />
+                                        <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
+                                            <div class="space-y-1 text-center">
+                                                <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                                                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                                </svg>
+                                                <div class="flex text-sm text-gray-600">
+                                                    <span id="orderFileName">拖拽文件到此处或点击上传</span>
+                                                </div>
+                                                <p class="text-xs text-gray-500">仅支持 .xlsx 格式</p>
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- 排班表文件上传 -->
+                            <div class="file-upload-container">
+                                <div class="drag-drop-zone" id="scheduleDropZone">
+                                    <label class="block">
+                                        <span class="text-gray-700">排班表文件</span>
+                                        <input type="file" 
+                                               name="schedule_file" 
+                                               id="scheduleFile" 
+                                               accept=".xlsx"
+                                               class="hidden"
+                                               onchange="handleFileSelect(this, 'scheduleFileName')" />
+                                        <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
+                                            <div class="space-y-1 text-center">
+                                                <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                                                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                                </svg>
+                                                <div class="flex text-sm text-gray-600">
+                                                    <span id="scheduleFileName">拖拽文件到此处或点击上传</span>
+                                                </div>
+                                                <p class="text-xs text-gray-500">仅支持 .xlsx 格式</p>
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- 提交按钮 -->
+                            <div class="flex justify-center">
+                                <button type="submit" 
+                                        id="submitBtn"
+                                        class="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors duration-200"
+                                        disabled>
+                                    开始处理
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- 进度显示 -->
+                    <div id="progressContainer" class="hidden">
+                        <div class="mb-4">
+                            <div class="flex justify-between mb-1">
+                                <span class="text-gray-700">处理进度</span>
+                                <span class="text-gray-700" id="progressText">0%</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                <div class="bg-blue-600 h-2.5 rounded-full progress-bar-animated" id="progressBar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <p id="statusMessage" class="text-gray-600 text-center"></p>
+                    </div>
+
+                    <!-- 结果显示 -->
+                    <div id="resultContainer" class="hidden mt-8">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">处理结果</h3>
+                        <div id="resultContent" class="bg-gray-50 rounded-lg p-4">
+                            <!-- 结果内容将通过 JavaScript 动态插入 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 使用说明 -->
+                <div class="bg-white rounded-xl shadow-lg p-8">
+                    <h2 class="text-2xl font-semibold text-gray-800 mb-6">使用说明</h2>
+                    <div class="space-y-4 text-gray-600">
+                        <div>
+                            <h3 class="font-medium text-gray-900 mb-2">订单数据要求</h3>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li>文件格式：Excel (.xlsx)</li>
+                                <li>必需字段：主订单编号、子订单编号、商品ID、选购商品、流量来源、流量体裁、取消原因、订单状态、订单应付金额、订单提交日期、订单提交时间</li>
+                                <li>数据格式要求：日期格式统一</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h3 class="font-medium text-gray-900 mb-2">排班表要求</h3>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li>文件格式：Excel (.xlsx)</li>
+                                <li>必需字段：日期、上播时间、下播时间、主播姓名、场控姓名、时段消耗</li>
+                                <li>时间格式：YYYY-MM-DD HH:mm:ss</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h3 class="font-medium text-gray-900 mb-2">注意事项</h3>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li>文件大小限制：100MB</li>
+                                <li>处理时间视数据量而定</li>
+                                <li>请确保数据完整性和格式正确性</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
             </div>
-            
-            <div class="file-input-group">
-                <label class="file-input-label">排班表文件：</label>
-                <input type="file" name="schedule_file" accept=".xlsx" class="file-input" required>
-                <div class="file-info" id="scheduleFileInfo"></div>
-                <div class="error-message" id="scheduleFileError"></div>
-            </div>
-            
-            <button type="submit" class="submit-btn" id="submitBtn">开始处理</button>
-        </form>
-        
-        <div id="progressContainer" class="progress-container">
-            <div class="progress-bar">
-                <div id="progress" class="progress"></div>
-            </div>
-            <div id="statusText" class="status-text">准备处理...</div>
         </div>
-        
-        <div id="logContainer" class="log-container"></div>
     </div>
 
     <script>
-        let ws = null;
+        // 文件处理相关变量
         let taskId = null;
-        let statusCheckInterval = null;
-        let retryCount = 0;
-        const MAX_RETRIES = 3;
-        const RETRY_DELAY = 2000; // 2秒
-        const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+        let progressCheckInterval = null;
 
-        // 文件输入处理
-        document.querySelectorAll('input[type="file"]').forEach(input => {
-            const fileInfo = document.getElementById(input.name === 'order_file' ? 'orderFileInfo' : 'scheduleFileInfo');
-            const fileError = document.getElementById(input.name === 'order_file' ? 'orderFileError' : 'scheduleFileError');
+        // 获取 API 基础 URL
+        function getApiBaseUrl() {
+            return window.location.origin;
+        }
+
+        // 文件选择处理
+        function handleFileSelect(input, displayId) {
+            const fileName = input.files[0]?.name || '拖拽文件到此处或点击上传';
+            document.getElementById(displayId).textContent = fileName;
+            updateSubmitButtonState();
+        }
+
+        // 更新提交按钮状态
+        function updateSubmitButtonState() {
+            const orderFile = document.getElementById('orderFile').files[0];
+            const scheduleFile = document.getElementById('scheduleFile').files[0];
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = !(orderFile && scheduleFile);
+        }
+
+        // 表单提交处理
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
             
-            input.addEventListener('change', function(e) {
-                const file = e.target.files[0];
-                fileError.textContent = '';
+            const formData = new FormData();
+            formData.append('order_file', document.getElementById('orderFile').files[0]);
+            formData.append('schedule_file', document.getElementById('scheduleFile').files[0]);
+            
+            try {
+                // 显示进度条
+                document.getElementById('progressContainer').classList.remove('hidden');
+                document.getElementById('submitBtn').disabled = true;
                 
-                if (file) {
-                    // 验证文件类型
-                    if (!file.name.toLowerCase().endsWith('.xlsx')) {
-                        fileError.textContent = '请选择 .xlsx 格式的文件';
-                        input.value = '';
-                        fileInfo.textContent = '';
-                        return;
-                    }
-                    
-                    // 验证文件大小
-                    if (file.size > MAX_FILE_SIZE) {
-                        fileError.textContent = '文件大小不能超过 100MB';
-                        input.value = '';
-                        fileInfo.textContent = '';
-                        return;
-                    }
-                    
-                    fileInfo.textContent = `已选择：${file.name} (${formatFileSize(file.size)})`;
-                    addLogEntry(`已选择${input.name === 'order_file' ? '订单' : '排班表'}文件: ${file.name} (${formatFileSize(file.size)})`, "info");
-                } else {
-                    fileInfo.textContent = '';
+                // 发送文件
+                const response = await fetch(`${getApiBaseUrl()}/api/process`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`上传失败: ${response.status} ${response.statusText}`);
                 }
                 
-                updateSubmitButton();
+                const data = await response.json();
+                taskId = data.task_id;
+                
+                // 开始检查进度
+                startProgressCheck();
+                
+            } catch (error) {
+                console.error('上传错误:', error);
+                document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
+                document.getElementById('progressContainer').classList.add('hidden');
+                document.getElementById('submitBtn').disabled = false;
+            }
+        });
+
+        // 检查处理进度
+        async function checkProgress() {
+            if (!taskId) return;
+            
+            try {
+                const response = await fetch(`${getApiBaseUrl()}/api/status/${taskId}`);
+                if (!response.ok) {
+                    throw new Error(`获取状态失败: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // 更新进度条
+                const progressBar = document.getElementById('progressBar');
+                const progressText = document.getElementById('progressText');
+                const statusMessage = document.getElementById('statusMessage');
+                
+                progressBar.style.width = `${data.progress}%`;
+                progressText.textContent = `${data.progress}%`;
+                statusMessage.textContent = data.message;
+                
+                // 处理完成
+                if (data.status === 'completed') {
+                    clearInterval(progressCheckInterval);
+                    document.getElementById('submitBtn').disabled = false;
+                    
+                    // 显示下载链接
+                    const resultContainer = document.getElementById('resultContainer');
+                    const resultContent = document.getElementById('resultContent');
+                    resultContainer.classList.remove('hidden');
+                    
+                    // 创建下载链接
+                    const blob = new Blob([Uint8Array.from(atob(data.result), c => c.charCodeAt(0))], {
+                        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    });
+                    const url = URL.createObjectURL(blob);
+                    
+                    resultContent.innerHTML = `
+                        <div class="text-center">
+                            <p class="text-green-600 mb-4">✓ 处理完成</p>
+                            <a href="${url}" 
+                               download="processed_result.xlsx"
+                               class="inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                                下载结果文件
+                            </a>
+                        </div>
+                    `;
+                }
+                
+                // 处理失败
+                if (data.status === 'failed') {
+                    clearInterval(progressCheckInterval);
+                    document.getElementById('submitBtn').disabled = false;
+                    statusMessage.textContent = `处理失败: ${data.message}`;
+                    statusMessage.classList.add('error-message');
+                }
+                
+            } catch (error) {
+                console.error('检查进度错误:', error);
+                clearInterval(progressCheckInterval);
+                document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
+                document.getElementById('submitBtn').disabled = false;
+            }
+        }
+
+        // 开始定期检查进度
+        function startProgressCheck() {
+            if (progressCheckInterval) {
+                clearInterval(progressCheckInterval);
+            }
+            progressCheckInterval = setInterval(checkProgress, 1000);
+        }
+
+        // 拖放功能
+        ['orderDropZone', 'scheduleDropZone'].forEach(zoneId => {
+            const zone = document.getElementById(zoneId);
+            const input = zone.querySelector('input[type="file"]');
+
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                zone.classList.add('drag-over');
+            });
+
+            zone.addEventListener('dragleave', () => {
+                zone.classList.remove('drag-over');
+            });
+
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('drag-over');
+                const file = e.dataTransfer.files[0];
+                if (file && file.name.endsWith('.xlsx')) {
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(file);
+                    input.files = dataTransfer.files;
+                    handleFileSelect(input, zoneId === 'orderDropZone' ? 'orderFileName' : 'scheduleFileName');
+                }
             });
         });
 
-        // 更新提交按钮状态
-        function updateSubmitButton() {
-            const orderFile = document.querySelector('input[name="order_file"]').files[0];
-            const scheduleFile = document.querySelector('input[name="schedule_file"]').files[0];
-            const submitBtn = document.getElementById('submitBtn');
+        // 日志处理函数
+        function appendLog(logData) {
+            const logContent = document.getElementById('logContent');
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry log-${logData.level}`;
+            logEntry.textContent = `${logData.message}`;
             
-            submitBtn.disabled = !(orderFile && scheduleFile);
+            // 添加到日志窗口
+            logContent.appendChild(logEntry);
+            
+            // 自动滚动到底部
+            logContent.scrollTop = logContent.scrollHeight;
+            
+            // 限制日志条数
+            const maxLogs = 1000;
+            while (logContent.children.length > maxLogs) {
+                logContent.removeChild(logContent.firstChild);
+            }
         }
+
+        // 轮询获取日志
+        let lastLogId = 0;
+        async function pollLogs() {
+            try {
+                const response = await fetch(`${getApiBaseUrl()}/api/logs?since=${lastLogId}`);
+                if (!response.ok) {
+                    throw new Error(`获取日志失败: ${response.status}`);
+                }
+                
+                const logs = await response.json();
+                if (logs && logs.length > 0) {
+                    logs.forEach(log => {
+                        appendLog(log);
+                        lastLogId = Math.max(lastLogId, log.id);
+                    });
+                }
+            } catch (error) {
+                console.error('获取日志错误:', error);
+                appendLog({
+                    level: 'error',
+                    message: `获取日志失败: ${error.message}`
+                });
+            }
+        }
+
+        // 开始轮询
+        let pollInterval = null;
+        function startPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+            // 每秒轮询一次
+            pollInterval = setInterval(pollLogs, 1000);
+            
+            // 添加页面卸载时的清理
+            window.addEventListener('beforeunload', () => {
+                if (pollInterval) {
+                    clearInterval(pollInterval);
+                }
+            });
+        }
+
+        // 页面加载时开始轮询
+        window.addEventListener('load', startPolling);
 
         // WebSocket 连接
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws/logs`);
+            ws = new WebSocket(`${protocol}//${window.location.host}/api/ws/logs`);
             
             ws.onopen = function() {
                 addLogEntry("WebSocket 连接已建立", "info");
@@ -227,194 +494,6 @@
                 addLogEntry("WebSocket 连接错误，正在重试...", "error");
             };
         }
-
-        // 添加日志条目
-        function addLogEntry(message, level) {
-            const logContainer = document.getElementById('logContainer');
-            const entry = document.createElement('div');
-            entry.className = `log-entry log-${level}`;
-            entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
-            logContainer.appendChild(entry);
-            logContainer.scrollTop = logContainer.scrollHeight;
-
-            while (logContainer.children.length > 1000) {
-                logContainer.removeChild(logContainer.firstChild);
-            }
-        }
-
-        // 检查任务状态
-        async function checkTaskStatus() {
-            if (!taskId) return;
-            
-            try {
-                const response = await fetch(`/api/status/${taskId}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                
-                document.getElementById('progress').style.width = `${data.progress}%`;
-                document.getElementById('statusText').textContent = data.message;
-                
-                switch (data.status) {
-                    case 'completed':
-                        clearInterval(statusCheckInterval);
-                        handleTaskCompletion(data);
-                        break;
-                    
-                    case 'failed':
-                        clearInterval(statusCheckInterval);
-                        handleTaskFailure(data);
-                        break;
-                    
-                    case 'not_found':
-                        if (++retryCount > MAX_RETRIES) {
-                            clearInterval(statusCheckInterval);
-                            handleTaskNotFound();
-                        }
-                        break;
-                    
-                    case 'processing':
-                        retryCount = 0;
-                        break;
-                }
-            } catch (error) {
-                console.error('检查任务状态时出错:', error);
-                addLogEntry(`检查任务状态出错: ${error.message}`, "error");
-                
-                if (++retryCount > MAX_RETRIES) {
-                    clearInterval(statusCheckInterval);
-                    handleTaskError(error);
-                }
-            }
-        }
-
-        // 处理任务完成
-        function handleTaskCompletion(data) {
-            addLogEntry("任务处理完成，正在下载结果...", "info");
-            
-            try {
-                const blob = new Blob([atob(data.result)], {
-                    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = data.filename || 'processed_result.xlsx';
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-                
-                resetUI();
-                addLogEntry("结果文件已下载", "info");
-            } catch (error) {
-                addLogEntry(`下载结果文件时出错: ${error.message}`, "error");
-                handleTaskError(error);
-            }
-        }
-
-        // 处理任务失败
-        function handleTaskFailure(data) {
-            addLogEntry(`任务处理失败: ${data.message}`, "error");
-            if (data.error_trace) {
-                addLogEntry(`错误详情: ${data.error_trace}`, "error");
-            }
-            resetUI();
-        }
-
-        // 处理任务不存在
-        function handleTaskNotFound() {
-            addLogEntry("任务不存在或已过期", "error");
-            resetUI();
-        }
-
-        // 处理任务错误
-        function handleTaskError(error) {
-            addLogEntry(`系统错误: ${error.message}`, "error");
-            resetUI();
-        }
-
-        // 重置界面
-        function resetUI() {
-            document.getElementById('uploadForm').reset();
-            document.getElementById('progressContainer').style.display = 'none';
-            document.getElementById('orderFileInfo').textContent = '';
-            document.getElementById('scheduleFileInfo').textContent = '';
-            document.getElementById('orderFileError').textContent = '';
-            document.getElementById('scheduleFileError').textContent = '';
-            document.getElementById('submitBtn').disabled = true;
-            taskId = null;
-            retryCount = 0;
-        }
-
-        // 处理表单提交
-        document.getElementById('uploadForm').onsubmit = async function(e) {
-            e.preventDefault();
-            
-            const formData = new FormData(this);
-            const orderFile = formData.get('order_file');
-            const scheduleFile = formData.get('schedule_file');
-
-            // 验证文件是否选择
-            if (!orderFile || !scheduleFile) {
-                addLogEntry("请选择要上传的文件", "error");
-                return;
-            }
-
-            document.getElementById('progressContainer').style.display = 'block';
-            document.getElementById('submitBtn').disabled = true;
-            
-            try {
-                addLogEntry("开始上传文件...", "info");
-                
-                const response = await fetch('/api/process', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    taskId = data.task_id;
-                    addLogEntry(`文件上传成功，任务ID: ${taskId}`, "info");
-                    statusCheckInterval = setInterval(checkTaskStatus, 1000);
-                } else {
-                    addLogEntry(`上传失败: ${data.error}`, "error");
-                    resetUI();
-                }
-            } catch (error) {
-                addLogEntry(`上传出错: ${error.message}`, "error");
-                resetUI();
-            }
-        };
-
-        // 格式化文件大小
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 Bytes';
-            const k = 1024;
-            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
-
-        // 页面加载完成后初始化
-        window.addEventListener('load', function() {
-            addLogEntry("系统初始化...", "info");
-            connectWebSocket();
-            updateSubmitButton();
-        });
-
-        // 页面关闭前清理
-        window.addEventListener('beforeunload', function() {
-            if (ws) {
-                ws.close();
-            }
-            if (statusCheckInterval) {
-                clearInterval(statusCheckInterval);
-            }
-        });
     </script>
 </body>
 </html> 
