@@ -309,6 +309,38 @@
             }
         });
 
+        // 轮询获取日志
+        let lastLogId = 0;
+        let isPolling = false;
+
+        async function pollLogs() {
+            if (isPolling) return;
+            
+            try {
+                isPolling = true;
+                const response = await fetch(`${getApiBaseUrl()}/api/logs?since=${lastLogId}`);
+                if (!response.ok) {
+                    throw new Error(`获取日志失败: ${response.status}`);
+                }
+                
+                const logs = await response.json();
+                if (logs && logs.length > 0) {
+                    logs.forEach(log => {
+                        appendLog(log);
+                        lastLogId = Math.max(lastLogId, log.id);
+                    });
+                }
+            } catch (error) {
+                console.error('获取日志错误:', error);
+                appendLog({
+                    level: 'error',
+                    message: `获取日志失败: ${error.message}`
+                });
+            } finally {
+                isPolling = false;
+            }
+        }
+
         // 检查处理进度
         async function checkProgress() {
             if (!taskId) return;
@@ -356,6 +388,9 @@
                             </a>
                         </div>
                     `;
+                    
+                    // 停止轮询
+                    clearInterval(pollInterval);
                 }
                 
                 // 处理失败
@@ -364,6 +399,9 @@
                     document.getElementById('submitBtn').disabled = false;
                     statusMessage.textContent = `处理失败: ${data.message}`;
                     statusMessage.classList.add('error-message');
+                    
+                    // 停止轮询
+                    clearInterval(pollInterval);
                 }
                 
             } catch (error) {
@@ -371,7 +409,27 @@
                 clearInterval(progressCheckInterval);
                 document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
                 document.getElementById('submitBtn').disabled = false;
+                
+                // 停止轮询
+                clearInterval(pollInterval);
             }
+        }
+
+        // 开始轮询
+        let pollInterval = null;
+        function startPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+            // 每3秒轮询一次
+            pollInterval = setInterval(pollLogs, 3000);
+            
+            // 添加页面卸载时的清理
+            window.addEventListener('beforeunload', () => {
+                if (pollInterval) {
+                    clearInterval(pollInterval);
+                }
+            });
         }
 
         // 开始定期检查进度
@@ -379,7 +437,8 @@
             if (progressCheckInterval) {
                 clearInterval(progressCheckInterval);
             }
-            progressCheckInterval = setInterval(checkProgress, 1000);
+            // 每3秒检查一次进度
+            progressCheckInterval = setInterval(checkProgress, 3000);
         }
 
         // 拖放功能
@@ -428,51 +487,6 @@
                 logContent.removeChild(logContent.firstChild);
             }
         }
-
-        // 轮询获取日志
-        let lastLogId = 0;
-        async function pollLogs() {
-            try {
-                const response = await fetch(`${getApiBaseUrl()}/api/logs?since=${lastLogId}`);
-                if (!response.ok) {
-                    throw new Error(`获取日志失败: ${response.status}`);
-                }
-                
-                const logs = await response.json();
-                if (logs && logs.length > 0) {
-                    logs.forEach(log => {
-                        appendLog(log);
-                        lastLogId = Math.max(lastLogId, log.id);
-                    });
-                }
-            } catch (error) {
-                console.error('获取日志错误:', error);
-                appendLog({
-                    level: 'error',
-                    message: `获取日志失败: ${error.message}`
-                });
-            }
-        }
-
-        // 开始轮询
-        let pollInterval = null;
-        function startPolling() {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-            }
-            // 每秒轮询一次
-            pollInterval = setInterval(pollLogs, 1000);
-            
-            // 添加页面卸载时的清理
-            window.addEventListener('beforeunload', () => {
-                if (pollInterval) {
-                    clearInterval(pollInterval);
-                }
-            });
-        }
-
-        // 页面加载时开始轮询
-        window.addEventListener('load', startPolling);
 
         // WebSocket 连接
         function connectWebSocket() {
