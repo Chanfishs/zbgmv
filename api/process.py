@@ -109,7 +109,7 @@ async def get_task_status(task_id: str) -> dict:
     try:
             status_dict = json.loads(status)
             print(f"[DEBUG] 成功解析任务状态: {status_dict}")
-        except json.JSONDecodeError as e:
+    except json.JSONDecodeError as e:
             print(f"[ERROR] 解析任务状态失败: {str(e)}")
             return {"status": "error", "message": "任务状态格式错误"}
         
@@ -224,7 +224,7 @@ class ConnectionManager:
         for message in self.message_queue:
     try:
                 await websocket.send_json(message)
-            except Exception as e:
+        except Exception as e:
                 logger.error(f"Error sending queued message: {str(e)}")
                 break
 
@@ -248,7 +248,7 @@ class ConnectionManager:
         for connection in list(self.active_connections):
     try:
                 await connection.send_json(data)
-            except Exception as e:
+        except Exception as e:
                 logger.error(f"Error broadcasting message: {str(e)}")
                 self.active_connections.remove(connection)
 
@@ -270,7 +270,7 @@ class WebSocketLogHandler(logging.Handler):
                 asyncio.run(
                     manager.broadcast(msg, record.levelname.lower())
                 )
-        except Exception as e:
+    except Exception as e:
             print(f"Error in WebSocketLogHandler: {str(e)}")
 
 # 添加WebSocket日志处理器
@@ -305,7 +305,7 @@ class BufferLogHandler(logging.Handler):
     try:
             msg = self.format(record)
             add_log(msg, record.levelname.lower())
-        except Exception as e:
+    except Exception as e:
             print(f"Error in BufferLogHandler: {str(e)}")
 
 # 添加缓冲日志处理器
@@ -415,7 +415,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             logger.debug("开始读取排班表文件...")
             schedule_data = await schedule_file.read()
             logger.info(f"排班表文件读取完成，大小: {len(schedule_data)} bytes")
-        except Exception as e:
+    except Exception as e:
             logger.error(f"文件读取失败: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
@@ -461,7 +461,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
                 }
             )
 
-        except Exception as e:
+    except Exception as e:
             logger.error(f"任务创建失败: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
@@ -567,9 +567,9 @@ async def cancel_task(task_id: str):
             task.cancel()
     try:
                 await task
-            except asyncio.CancelledError:
+        except asyncio.CancelledError:
                 print(f"[DEBUG] 任务 {task_id} 已取消")
-            finally:
+        finally:
                 del running_tasks[task_id]
                 await set_task_status(task_id, {
                     "status": TASK_STATUS_CANCELLED,
@@ -722,7 +722,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             
             logger.info(f"任务 {task_id} 处理完成")
             
-        except Exception as e:
+    except Exception as e:
             logger.error(f"处理数据时出错: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             raise
