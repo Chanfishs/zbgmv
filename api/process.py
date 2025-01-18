@@ -22,8 +22,8 @@ from typing import Dict, Set, Optional, List
 # 配置日志格式
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 logger = logging.getLogger(__name__)
@@ -37,14 +37,24 @@ except ImportError:
     print("[WARNING] psutil 模块不可用，系统资源监控功能将被禁用")
 
 # Redis 连接配置
-UPSTASH_REDIS_REST_URL = os.getenv('UPSTASH_REDIS_REST_URL')
-UPSTASH_REDIS_REST_TOKEN = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL")
+UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
-# 必需的列名定义（更新为实际的列名）
-required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', '流量来源', 
-                         '流量体裁', '取消原因', '订单状态', '订单应付金额', 
-                         '订单提交日期', '订单提交时间']
-required_schedule_columns = ['日期', '上播时间', '下播时间', '主播姓名', '场控姓名', '时段消耗']
+# 必需的列名定义
+required_order_columns = [
+    "主订单编号",
+    "子订单编号",
+    "商品ID",
+    "选购商品",
+    "流量来源",
+    "流量体裁",
+    "取消原因",
+    "订单状态",
+    "订单应付金额",
+    "订单提交日期",
+    "订单提交时间",
+]
+required_schedule_columns = ["日期", "上播时间", "下播时间", "主播姓名", "场控姓名", "时段消耗"]
 
 # 任务状态常量
 TASK_STATUS_PENDING = "pending"
@@ -61,7 +71,9 @@ running_tasks = {}
 
 print("[DEBUG] ===== Redis 配置信息 =====")
 print(f"[DEBUG] UPSTASH_REDIS_REST_URL: {UPSTASH_REDIS_REST_URL}")
-print(f"[DEBUG] UPSTASH_REDIS_REST_TOKEN: {'***' + UPSTASH_REDIS_REST_TOKEN[-8:] if UPSTASH_REDIS_REST_TOKEN else 'None'}")
+print(
+    f"[DEBUG] UPSTASH_REDIS_REST_TOKEN: {'***' + UPSTASH_REDIS_REST_TOKEN[-8:] if UPSTASH_REDIS_REST_TOKEN else 'None'}"
+)
 
 # 创建 Redis 客户端
 redis = None
@@ -69,25 +81,25 @@ redis = None
 def get_redis_client():
     """获取 Redis 客户端实例"""
     global redis
-    try:
+try:
         if not redis:
             if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
                 print("[ERROR] Redis 配置未设置")
                 raise Exception("请检查 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN 环境变量")
-            
+
             print("[DEBUG] 正在初始化 Redis 客户端")
             redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
-            
+
             # 测试连接
             test_key = "test:init"
             test_value = "connection_test"
             redis.set(test_key, test_value)
             result = redis.get(test_key)
             redis.delete(test_key)
-            
+
             if result != test_value:
                 raise Exception("Redis 连接测试失败")
-            
+
             print("[DEBUG] Redis 客户端初始化成功")
         return redis
     except Exception as e:
@@ -96,35 +108,35 @@ def get_redis_client():
 
 async def get_task_status(task_id: str) -> dict:
     """从Redis获取任务状态"""
-    try:
+try:
         redis = get_redis_client()
         key = f"task_status:{task_id}"
         print(f"[DEBUG] 获取任务状态，键名: {key}")
-        
+
         status = redis.get(key)
         if not status:
             print(f"[DEBUG] 未找到任务状态: {key}")
             return {"status": "not_found"}
-        
+
     try:
             status_dict = json.loads(status)
             print(f"[DEBUG] 成功解析任务状态: {status_dict}")
-    except json.JSONDecodeError as e:
+        except json.JSONDecodeError as e:
             print(f"[ERROR] 解析任务状态失败: {str(e)}")
             return {"status": "error", "message": "任务状态格式错误"}
-        
+
         # 如果存在大型结果数据，则重新组装
-        if status_dict.get('has_large_result'):
+        if status_dict.get("has_large_result"):
             info_key = f"task_result:{task_id}:info"
             print(f"[DEBUG] 获取分块信息，键名: {info_key}")
             result_info = redis.get(info_key)
-            
+
             if result_info:
                 info = json.loads(result_info)
-                total_chunks = info['total_chunks']
+                total_chunks = info["total_chunks"]
                 print(f"[DEBUG] 开始重组 {total_chunks} 个数据块")
-                
-                result_data = ''
+
+                result_data = ""
                 for i in range(total_chunks):
                     chunk_key = f"task_result:{task_id}:chunk:{i}"
                     chunk = redis.get(chunk_key)
@@ -132,11 +144,11 @@ async def get_task_status(task_id: str) -> dict:
                         result_data += chunk
                     else:
                         print(f"[WARNING] 未找到数据块 {i}")
-                
-                status_dict['result'] = result_data
-                del status_dict['has_large_result']
+
+                status_dict["result"] = result_data
+                del status_dict["has_large_result"]
                 print(f"[DEBUG] 数据重组完成，总大小: {len(result_data)}")
-        
+
         return status_dict
     except Exception as e:
         print(f"[ERROR] 获取任务状态失败: {str(e)}")
@@ -144,47 +156,47 @@ async def get_task_status(task_id: str) -> dict:
 
 async def set_task_status(task_id: str, status: dict):
     """设置任务状态到Redis"""
-    try:
+try:
         redis = get_redis_client()
         key = f"task_status:{task_id}"
         print(f"[DEBUG] 设置任务状态，键名: {key}")
-        
+
         # 如果状态包含结果数据且大小超过 900KB，则分块存储
-        if 'result' in status and len(str(status['result'])) > 900000:
+        if "result" in status and len(str(status["result"])) > 900000:
             print(f"[DEBUG] 检测到大型结果数据，开始分块存储")
-            
+
             # 存储主状态信息，不包含结果数据
-            main_status = {k: v for k, v in status.items() if k != 'result'}
-            main_status['has_large_result'] = True
-            
+            main_status = {k: v for k, v in status.items() if k != "result"}
+            main_status["has_large_result"] = True
+
             redis.setex(
                 key,
                 TASK_EXPIRY,
-                json.dumps(main_status)
+                json.dumps(main_status),
             )
             print(f"[DEBUG] 已存储主状态信息")
-            
+
             # 分块存储结果数据
-            result_data = status['result']
+            result_data = status["result"]
             chunk_size = 800000  # 每块约800KB
-            chunks = [result_data[i:i + chunk_size] for i in range(0, len(result_data), chunk_size)]
-            
+            chunks = [result_data[i : i + chunk_size] for i in range(0, len(result_data), chunk_size)]
+
             print(f"[DEBUG] 开始存储 {len(chunks)} 个数据块")
             for i, chunk in enumerate(chunks):
                 chunk_key = f"task_result:{task_id}:chunk:{i}"
                 redis.setex(
                     chunk_key,
                     TASK_EXPIRY,
-                    chunk
+                    chunk,
                 )
                 print(f"[DEBUG] 已存储数据块 {i}")
-            
+
             # 存储分块信息
             info_key = f"task_result:{task_id}:info"
             redis.setex(
                 info_key,
                 TASK_EXPIRY,
-                json.dumps({'total_chunks': len(chunks)})
+                json.dumps({"total_chunks": len(chunks)}),
             )
             print(f"[DEBUG] 已存储分块信息")
         else:
@@ -192,7 +204,7 @@ async def set_task_status(task_id: str, status: dict):
             redis.setex(
                 key,
                 TASK_EXPIRY,
-                json.dumps(status)
+                json.dumps(status),
             )
             print(f"[DEBUG] 已存储状态数据，大小: {len(str(status))}")
     except Exception as e:
@@ -222,9 +234,9 @@ class ConnectionManager:
         
         # 发送队列中的历史消息
         for message in self.message_queue:
-    try:
+        try:
                 await websocket.send_json(message)
-        except Exception as e:
+            except Exception as e:
                 logger.error(f"Error sending queued message: {str(e)}")
                 break
 
@@ -246,9 +258,9 @@ class ConnectionManager:
         
         # 广播给所有连接
         for connection in list(self.active_connections):
-    try:
+        try:
                 await connection.send_json(data)
-        except Exception as e:
+            except Exception as e:
                 logger.error(f"Error broadcasting message: {str(e)}")
                 self.active_connections.remove(connection)
 
@@ -270,13 +282,13 @@ class WebSocketLogHandler(logging.Handler):
                 asyncio.run(
                     manager.broadcast(msg, record.levelname.lower())
                 )
-    except Exception as e:
+        except Exception as e:
             print(f"Error in WebSocketLogHandler: {str(e)}")
 
 # 添加WebSocket日志处理器
 ws_handler = WebSocketLogHandler()
 ws_handler.setFormatter(
-    logging.Formatter('%(message)s')
+    logging.Formatter("%(message)s")
 )
 logger.addHandler(ws_handler)
 
@@ -305,13 +317,13 @@ class BufferLogHandler(logging.Handler):
     try:
             msg = self.format(record)
             add_log(msg, record.levelname.lower())
-    except Exception as e:
+        except Exception as e:
             print(f"Error in BufferLogHandler: {str(e)}")
 
 # 添加缓冲日志处理器
 buffer_handler = BufferLogHandler()
 buffer_handler.setFormatter(
-    logging.Formatter('%(message)s')
+    logging.Formatter("%(message)s")
 )
 logger.addHandler(buffer_handler)
 
@@ -325,7 +337,7 @@ async def get_logs(since: int = 0):
 @app.on_event("startup")
 async def startup_event():
     """应用程序启动时的事件处理"""
-    try:
+try:
         logger.info("应用程序启动")
         logger.info("正在初始化 Redis 连接...")
         global redis
@@ -367,7 +379,7 @@ async def monitor_system_resources():
             "message": "系统资源监控功能未启用（psutil 模块不可用）"
         }
     
-    try:
+try:
         process = psutil.Process(os.getpid())
         return {
             "status": "success",
@@ -385,7 +397,7 @@ async def monitor_system_resources():
 @app.post("/api/process")
 async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFile = File(...), schedule_file: UploadFile = File(...)):
     """处理文件上传"""
-    try:
+try:
         logger.info(f"开始处理文件上传: order_file={order_file.filename}, schedule_file={schedule_file.filename}")
         logger.debug(f"环境变量检查: REDIS_URL={bool(UPSTASH_REDIS_REST_URL)}, REDIS_TOKEN={bool(UPSTASH_REDIS_REST_TOKEN)}")
         
@@ -399,7 +411,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
         logger.debug(f"文件信息: order_file_size={order_file.size}, schedule_file_size={schedule_file.size}")
         
         # 验证文件扩展名
-        if not order_file.filename.endswith('.xlsx') or not schedule_file.filename.endswith('.xlsx'):
+        if not order_file.filename.endswith(".xlsx") or not schedule_file.filename.endswith(".xlsx"):
             logger.error("文件格式错误：非 .xlsx 格式")
             return JSONResponse(
                 status_code=400,
@@ -415,7 +427,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
             logger.debug("开始读取排班表文件...")
             schedule_data = await schedule_file.read()
             logger.info(f"排班表文件读取完成，大小: {len(schedule_data)} bytes")
-    except Exception as e:
+        except Exception as e:
             logger.error(f"文件读取失败: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
@@ -461,7 +473,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
                 }
             )
 
-    except Exception as e:
+        except Exception as e:
             logger.error(f"任务创建失败: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             return JSONResponse(
@@ -480,7 +492,7 @@ async def handle_upload(background_tasks: BackgroundTasks, order_file: UploadFil
 @app.get("/api/status/{task_id}")
 async def get_task_status_endpoint(task_id: str):
     """获取任务处理状态"""
-    try:
+try:
         print(f"正在获取任务状态: {task_id}")
         
         status = await get_task_status(task_id)
@@ -567,9 +579,9 @@ async def cancel_task(task_id: str):
             task.cancel()
     try:
                 await task
-        except asyncio.CancelledError:
+            except asyncio.CancelledError:
                 print(f"[DEBUG] 任务 {task_id} 已取消")
-        finally:
+            finally:
                 del running_tasks[task_id]
                 await set_task_status(task_id, {
                     "status": TASK_STATUS_CANCELLED,
@@ -599,7 +611,7 @@ async def cancel_task_endpoint(task_id: str):
 
 async def process_data_in_background(task_id: str, order_data: bytes, schedule_data: bytes):
     """后台处理数据的异步函数"""
-    try:
+try:
         # 将任务添加到运行中的任务字典
         task = asyncio.current_task()
         running_tasks[task_id] = task
@@ -619,7 +631,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             # 读取订单数据
             logger.info("正在读取订单数据...")
             order_buffer = BytesIO(order_data)
-            df_order = pd.read_excel(order_buffer, engine='openpyxl')
+            df_order = pd.read_excel(order_buffer, engine="openpyxl")
             logger.info(f"订单数据读取成功，共 {len(df_order)} 行")
             
             await set_task_status(task_id, {
@@ -631,7 +643,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             # 读取排班数据
             logger.info("正在读取排班数据...")
             schedule_buffer = BytesIO(schedule_data)
-            df_schedule = pd.read_excel(schedule_buffer, engine='openpyxl')
+            df_schedule = pd.read_excel(schedule_buffer, engine="openpyxl")
             logger.info(f"排班数据读取成功，共 {len(df_schedule)} 行")
             
             await set_task_status(task_id, {
@@ -651,7 +663,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
                     error_msg.append(f"订单数据缺少列：{', '.join(missing_order_columns)}")
                 if missing_schedule_columns:
                     error_msg.append(f"排班表缺少列：{', '.join(missing_schedule_columns)}")
-                raise ValueError('\n'.join(error_msg))
+                raise ValueError("\n".join(error_msg))
             
             await set_task_status(task_id, {
                 "status": TASK_STATUS_PROCESSING,
@@ -680,8 +692,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
                     "message": f"正在处理数据块 {i+1}/{total_chunks}..."
                 })
                 
-                # 处理数据块
-    try:
+                try:
                     # 在这里添加你的数据处理逻辑
                     processed_chunk = chunk  # 替换为实际的处理逻辑
                     processed_chunks.append(processed_chunk)
@@ -706,8 +717,8 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             # 生成结果文件
             logger.info("生成结果文件...")
             output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_result.to_excel(writer, sheet_name='处理结果', index=False)
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df_result.to_excel(writer, sheet_name="处理结果", index=False)
 
             output.seek(0)
             result_data = output.getvalue()
@@ -717,12 +728,12 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
                 "status": TASK_STATUS_COMPLETED,
                 "progress": 100,
                 "message": "处理完成",
-                "result": base64.b64encode(result_data).decode('utf-8')
+                "result": base64.b64encode(result_data).decode("utf-8")
             })
             
             logger.info(f"任务 {task_id} 处理完成")
             
-    except Exception as e:
+        except Exception as e:
             logger.error(f"处理数据时出错: {str(e)}")
             logger.error(f"错误详情: {traceback.format_exc()}")
             raise
@@ -747,7 +758,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
 @app.get("/api/test-redis")
 async def test_redis_connection():
     """测试 Redis 连接"""
-    try:
+try:
         redis_client = get_redis_client()
         
         # 测试基本操作
@@ -800,7 +811,7 @@ async def test_redis_connection():
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 连接处理"""
     await manager.connect(websocket)
-    try:
+try:
         while True:
             # 保持连接活跃
             await websocket.receive_text()
