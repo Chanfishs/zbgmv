@@ -36,6 +36,10 @@ except ImportError:
     HAS_PSUTIL = False
     print("[WARNING] psutil 模块不可用，系统资源监控功能将被禁用")
 
+# Redis 连接配置和重试机制
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # 秒
+
 # Redis 连接配置
 UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL")
 UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
@@ -79,137 +83,184 @@ print(
 redis = None
 
 def get_redis_client():
-    """获取 Redis 客户端实例"""
+    """获取 Redis 客户端实例，带重试机制"""
     global redis
-    try:
-        if not redis:
-            if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
-                print("[ERROR] Redis 配置未设置")
-                raise Exception("请检查 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN 环境变量")
+    retry_count = 0
+    last_error = None
+    
+    while retry_count < MAX_RETRIES:
+        try:
+            if not redis:
+                if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
+                    logger.error("Redis 配置未设置，请检查环境变量")
+                    raise Exception("请检查 UPSTASH_REDIS_REST_URL 和 UPSTASH_REDIS_REST_TOKEN 环境变量")
 
-            print("[DEBUG] 正在初始化 Redis 客户端")
-            redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
+                logger.info(f"正在初始化 Redis 客户端 (尝试 {retry_count + 1}/{MAX_RETRIES})")
+                logger.debug(f"Redis URL: {UPSTASH_REDIS_REST_URL}")
+                logger.debug(f"Redis Token: ***{UPSTASH_REDIS_REST_TOKEN[-8:]}")
+                
+                redis = Redis(url=UPSTASH_REDIS_REST_URL, token=UPSTASH_REDIS_REST_TOKEN)
 
-            # 测试连接
-            test_key = "test:init"
-            test_value = "connection_test"
-            redis.set(test_key, test_value)
-            result = redis.get(test_key)
-            redis.delete(test_key)
+                # 测试连接
+                test_key = f"test:init:{uuid.uuid4()}"
+                test_value = f"connection_test_{time.time()}"
+                logger.debug(f"测试 Redis 连接，key: {test_key}")
+                
+                redis.set(test_key, test_value, ex=60)  # 60秒后过期
+                result = redis.get(test_key)
+                redis.delete(test_key)
 
-            if result != test_value:
-                raise Exception("Redis 连接测试失败")
+                if result != test_value:
+                    raise Exception(f"Redis 连接测试失败: 期望值 '{test_value}'，实际值 '{result}'")
 
-            print("[DEBUG] Redis 客户端初始化成功")
-        return redis
-    except Exception as e:
-        print(f"[ERROR] Redis 客户端初始化失败: {str(e)}")
-        raise
+                logger.info("Redis 客户端初始化成功")
+                return redis
+            return redis
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"Redis 客户端初始化失败 (尝试 {retry_count + 1}/{MAX_RETRIES}): {last_error}")
+            retry_count += 1
+            if retry_count < MAX_RETRIES:
+                logger.info(f"等待 {RETRY_DELAY} 秒后重试...")
+                time.sleep(RETRY_DELAY)
+            redis = None
+
+    logger.error(f"Redis 客户端初始化失败，已达到最大重试次数: {last_error}")
+    raise Exception(f"Redis 连接失败: {last_error}")
 
 async def get_task_status(task_id: str) -> dict:
-    """从Redis获取任务状态"""
-    try:
-        redis = get_redis_client()
-        key = f"task_status:{task_id}"
-        print(f"[DEBUG] 获取任务状态，键名: {key}")
-
-        status = redis.get(key)
-        if not status:
-            print(f"[DEBUG] 未找到任务状态: {key}")
-            return {"status": "not_found"}
-
+    """从Redis获取任务状态，带重试机制"""
+    retry_count = 0
+    last_error = None
+    
+    while retry_count < MAX_RETRIES:
         try:
-            status_dict = json.loads(status)
-            print(f"[DEBUG] 成功解析任务状态: {status_dict}")
-        except json.JSONDecodeError as e:
-            print(f"[ERROR] 解析任务状态失败: {str(e)}")
-            return {"status": "error", "message": "任务状态格式错误"}
+            redis_client = get_redis_client()
+            key = f"task_status:{task_id}"
+            logger.debug(f"获取任务状态，key: {key}")
 
-        # 如果存在大型结果数据，则重新组装
-        if status_dict.get("has_large_result"):
-            info_key = f"task_result:{task_id}:info"
-            print(f"[DEBUG] 获取分块信息，键名: {info_key}")
-            result_info = redis.get(info_key)
+            status = redis_client.get(key)
+            if not status:
+                logger.debug(f"未找到任务状态: {key}")
+                return {"status": "not_found"}
 
-            if result_info:
-                info = json.loads(result_info)
-                total_chunks = info["total_chunks"]
-                print(f"[DEBUG] 开始重组 {total_chunks} 个数据块")
+            try:
+                status_dict = json.loads(status)
+                logger.debug(f"成功解析任务状态: {status_dict}")
+            except json.JSONDecodeError as e:
+                logger.error(f"解析任务状态失败: {str(e)}")
+                return {"status": "error", "message": "任务状态格式错误"}
 
-                result_data = ""
-                for i in range(total_chunks):
-                    chunk_key = f"task_result:{task_id}:chunk:{i}"
-                    chunk = redis.get(chunk_key)
-                    if chunk:
-                        result_data += chunk
-                    else:
-                        print(f"[WARNING] 未找到数据块 {i}")
+            # 如果存在大型结果数据，则重新组装
+            if status_dict.get("has_large_result"):
+                info_key = f"task_result:{task_id}:info"
+                logger.debug(f"获取分块信息，key: {info_key}")
+                result_info = redis_client.get(info_key)
 
-                status_dict["result"] = result_data
-                del status_dict["has_large_result"]
-                print(f"[DEBUG] 数据重组完成，总大小: {len(result_data)}")
+                if result_info:
+                    info = json.loads(result_info)
+                    total_chunks = info["total_chunks"]
+                    logger.info(f"开始重组 {total_chunks} 个数据块")
 
-        return status_dict
-    except Exception as e:
-        print(f"[ERROR] 获取任务状态失败: {str(e)}")
-        return {"status": "error", "message": str(e)}
+                    result_data = ""
+                    for i in range(total_chunks):
+                        chunk_key = f"task_result:{task_id}:chunk:{i}"
+                        chunk = redis_client.get(chunk_key)
+                        if chunk:
+                            result_data += chunk
+                        else:
+                            logger.warning(f"未找到数据块 {i}")
+
+                    status_dict["result"] = result_data
+                    del status_dict["has_large_result"]
+                    logger.debug(f"数据重组完成，总大小: {len(result_data)} bytes")
+
+            return status_dict
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"获取任务状态失败 (尝试 {retry_count + 1}/{MAX_RETRIES}): {last_error}")
+            retry_count += 1
+            if retry_count < MAX_RETRIES:
+                logger.info(f"等待 {RETRY_DELAY} 秒后重试...")
+                await asyncio.sleep(RETRY_DELAY)
+
+    logger.error(f"获取任务状态失败，已达到最大重试次数: {last_error}")
+    return {"status": "error", "message": f"获取任务状态失败: {last_error}"}
 
 async def set_task_status(task_id: str, status: dict):
-    """设置任务状态到Redis"""
-    try:
-        redis = get_redis_client()
-        key = f"task_status:{task_id}"
-        print(f"[DEBUG] 设置任务状态，键名: {key}")
+    """设置任务状态到Redis，带重试机制"""
+    retry_count = 0
+    last_error = None
+    
+    while retry_count < MAX_RETRIES:
+        try:
+            redis_client = get_redis_client()
+            key = f"task_status:{task_id}"
+            logger.debug(f"设置任务状态，key: {key}, status: {status}")
 
-        # 如果状态包含结果数据且大小超过 900KB，则分块存储
-        if "result" in status and len(str(status["result"])) > 900000:
-            print(f"[DEBUG] 检测到大型结果数据，开始分块存储")
+            # 如果状态包含结果数据且大小超过 900KB，则分块存储
+            if "result" in status and len(str(status["result"])) > 900000:
+                logger.info(f"检测到大型结果数据 ({len(str(status['result']))} bytes)，开始分块存储")
 
-            # 存储主状态信息，不包含结果数据
-            main_status = {k: v for k, v in status.items() if k != "result"}
-            main_status["has_large_result"] = True
+                # 存储主状态信息，不包含结果数据
+                main_status = {k: v for k, v in status.items() if k != "result"}
+                main_status["has_large_result"] = True
+                main_status["update_time"] = time.time()
 
-            redis.setex(
-                key,
-                TASK_EXPIRY,
-                json.dumps(main_status),
-            )
-            print(f"[DEBUG] 已存储主状态信息")
-
-            # 分块存储结果数据
-            result_data = status["result"]
-            chunk_size = 800000  # 每块约800KB
-            chunks = [result_data[i : i + chunk_size] for i in range(0, len(result_data), chunk_size)]
-
-            print(f"[DEBUG] 开始存储 {len(chunks)} 个数据块")
-            for i, chunk in enumerate(chunks):
-                chunk_key = f"task_result:{task_id}:chunk:{i}"
-                redis.setex(
-                    chunk_key,
+                redis_client.setex(
+                    key,
                     TASK_EXPIRY,
-                    chunk,
+                    json.dumps(main_status),
                 )
-                print(f"[DEBUG] 已存储数据块 {i}")
+                logger.debug("已存储主状态信息")
 
-            # 存储分块信息
-            info_key = f"task_result:{task_id}:info"
-            redis.setex(
-                info_key,
-                TASK_EXPIRY,
-                json.dumps({"total_chunks": len(chunks)}),
-            )
-            print(f"[DEBUG] 已存储分块信息")
-        else:
-            # 正常存储小型状态数据
-            redis.setex(
-                key,
-                TASK_EXPIRY,
-                json.dumps(status),
-            )
-            print(f"[DEBUG] 已存储状态数据，大小: {len(str(status))}")
-    except Exception as e:
-        print(f"[ERROR] 设置任务状态失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"设置任务状态失败: {str(e)}")
+                # 分块存储结果数据
+                result_data = status["result"]
+                chunk_size = 800000  # 每块约800KB
+                chunks = [result_data[i:i + chunk_size] for i in range(0, len(result_data), chunk_size)]
+
+                logger.info(f"开始存储 {len(chunks)} 个数据块")
+                for i, chunk in enumerate(chunks):
+                    chunk_key = f"task_result:{task_id}:chunk:{i}"
+                    redis_client.setex(
+                        chunk_key,
+                        TASK_EXPIRY,
+                        chunk,
+                    )
+                    logger.debug(f"已存储数据块 {i+1}/{len(chunks)}")
+
+                # 存储分块信息
+                info_key = f"task_result:{task_id}:info"
+                redis_client.setex(
+                    info_key,
+                    TASK_EXPIRY,
+                    json.dumps({"total_chunks": len(chunks), "update_time": time.time()}),
+                )
+                logger.debug("已存储分块信息")
+            else:
+                # 正常存储小型状态数据
+                status["update_time"] = time.time()
+                redis_client.setex(
+                    key,
+                    TASK_EXPIRY,
+                    json.dumps(status),
+                )
+                logger.debug(f"已存储状态数据，大小: {len(str(status))} bytes")
+            
+            return
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"设置任务状态失败 (尝试 {retry_count + 1}/{MAX_RETRIES}): {last_error}")
+            retry_count += 1
+            if retry_count < MAX_RETRIES:
+                logger.info(f"等待 {RETRY_DELAY} 秒后重试...")
+                await asyncio.sleep(RETRY_DELAY)
+
+    logger.error(f"设置任务状态失败，已达到最大重试次数: {last_error}")
+    raise Exception(f"设置任务状态失败: {last_error}")
 
 # 创建 FastAPI 应用实例
 app = FastAPI()
@@ -673,7 +724,7 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             
             # 处理数据
             logger.info("开始处理数据...")
-            chunk_size = 5000
+            chunk_size = 1000  # 减小块大小以避免处理时间过长
             total_chunks = len(df_order) // chunk_size + 1
             processed_chunks = []
             
@@ -698,11 +749,25 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
                     processed_chunks.append(processed_chunk)
                     df_schedule = updated_schedule  # 更新排班表数据
                     logger.info(f"数据块 {i+1} 处理完成")
+                    
+                    # 每处理完一个块就保存一次中间结果
+                    temp_result = {
+                        "chunk_id": i,
+                        "total_chunks": total_chunks,
+                        "processed_data": processed_chunk.to_dict('records')
+                    }
+                    await set_task_status(task_id, {
+                        "status": TASK_STATUS_PROCESSING,
+                        "progress": progress,
+                        "message": f"正在处理数据块 {i+1}/{total_chunks}...",
+                        "temp_result": temp_result
+                    })
+                    
                 except Exception as e:
                     logger.error(f"处理数据块 {i+1} 时出错: {str(e)}")
                     raise
                 
-                # 释放内存
+                # 释放内存并等待一小段时间
                 del chunk
                 await asyncio.sleep(0.1)  # 让出控制权
             
@@ -728,7 +793,8 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
                 "status": TASK_STATUS_COMPLETED,
                 "progress": 100,
                 "message": "处理完成",
-                "result": base64.b64encode(result_data).decode("utf-8")
+                "result": base64.b64encode(result_data).decode("utf-8"),
+                "completion_time": time.time()
             })
             
             # 添加处理统计信息到日志
@@ -755,7 +821,8 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
         await set_task_status(task_id, {
             "status": TASK_STATUS_FAILED,
             "message": error_msg,
-            "error_trace": traceback.format_exc()
+            "error_trace": traceback.format_exc(),
+            "failure_time": time.time()
         })
         
     finally:

@@ -110,6 +110,9 @@
         let ws = null;
         let taskId = null;
         let statusCheckInterval = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 2000; // 2秒
 
         function connectWebSocket() {
             ws = new WebSocket(`ws://${window.location.host}/api/ws/logs`);
@@ -120,7 +123,12 @@
             };
             
             ws.onclose = function() {
+                addLogEntry("WebSocket 连接断开，正在重新连接...", "warning");
                 setTimeout(connectWebSocket, 1000);
+            };
+
+            ws.onerror = function(error) {
+                addLogEntry(`WebSocket 错误: ${error.message}`, "error");
             };
         }
 
@@ -128,9 +136,14 @@
             const logContainer = document.getElementById('logContainer');
             const entry = document.createElement('div');
             entry.className = `log-entry log-${level}`;
-            entry.textContent = message;
+            entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
             logContainer.appendChild(entry);
             logContainer.scrollTop = logContainer.scrollHeight;
+
+            // 限制日志条数
+            while (logContainer.children.length > 1000) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
         }
 
         async function checkTaskStatus() {
@@ -138,41 +151,108 @@
             
             try {
                 const response = await fetch(`/api/status/${taskId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 
+                // 更新进度条和状态文本
                 document.getElementById('progress').style.width = `${data.progress}%`;
                 document.getElementById('statusText').textContent = data.message;
                 
-                if (data.status === 'completed') {
-                    clearInterval(statusCheckInterval);
-                    const blob = new Blob([atob(data.result)], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = data.filename || 'processed_result.xlsx';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
-                    document.getElementById('uploadForm').reset();
-                    document.getElementById('progressContainer').style.display = 'none';
-                } else if (data.status === 'failed') {
-                    clearInterval(statusCheckInterval);
-                    addLogEntry(`处理失败: ${data.message}`, 'error');
-                    document.getElementById('progressContainer').style.display = 'none';
+                // 根据任务状态处理
+                switch (data.status) {
+                    case 'completed':
+                        clearInterval(statusCheckInterval);
+                        handleTaskCompletion(data);
+                        break;
+                    
+                    case 'failed':
+                        clearInterval(statusCheckInterval);
+                        handleTaskFailure(data);
+                        break;
+                    
+                    case 'not_found':
+                        if (++retryCount > MAX_RETRIES) {
+                            clearInterval(statusCheckInterval);
+                            handleTaskNotFound();
+                        }
+                        break;
+                    
+                    case 'processing':
+                        retryCount = 0; // 重置重试计数
+                        break;
                 }
             } catch (error) {
                 console.error('检查任务状态时出错:', error);
+                addLogEntry(`检查任务状态出错: ${error.message}`, "error");
+                
+                if (++retryCount > MAX_RETRIES) {
+                    clearInterval(statusCheckInterval);
+                    handleTaskError(error);
+                }
             }
+        }
+
+        function handleTaskCompletion(data) {
+            addLogEntry("任务处理完成，正在下载结果...", "info");
+            
+            try {
+                const blob = new Blob([atob(data.result)], {
+                    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = data.filename || 'processed_result.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                resetUI();
+                addLogEntry("结果文件已下载", "info");
+            } catch (error) {
+                addLogEntry(`下载结果文件时出错: ${error.message}`, "error");
+                handleTaskError(error);
+            }
+        }
+
+        function handleTaskFailure(data) {
+            addLogEntry(`任务处理失败: ${data.message}`, "error");
+            if (data.error_trace) {
+                addLogEntry(`错误详情: ${data.error_trace}`, "error");
+            }
+            resetUI();
+        }
+
+        function handleTaskNotFound() {
+            addLogEntry("任务不存在或已过期", "error");
+            resetUI();
+        }
+
+        function handleTaskError(error) {
+            addLogEntry(`系统错误: ${error.message}`, "error");
+            resetUI();
+        }
+
+        function resetUI() {
+            document.getElementById('uploadForm').reset();
+            document.getElementById('progressContainer').style.display = 'none';
+            taskId = null;
+            retryCount = 0;
         }
 
         document.getElementById('uploadForm').onsubmit = async function(e) {
             e.preventDefault();
+            resetUI();
             
             const formData = new FormData(this);
             document.getElementById('progressContainer').style.display = 'block';
             
             try {
+                addLogEntry("开始上传文件...", "info");
                 const response = await fetch('/api/process', {
                     method: 'POST',
                     body: formData
@@ -182,19 +262,33 @@
                 
                 if (response.ok) {
                     taskId = data.task_id;
+                    addLogEntry(`文件上传成功，任务ID: ${taskId}`, "info");
                     statusCheckInterval = setInterval(checkTaskStatus, 1000);
                 } else {
-                    addLogEntry(`上传失败: ${data.error}`, 'error');
-                    document.getElementById('progressContainer').style.display = 'none';
+                    addLogEntry(`上传失败: ${data.error}`, "error");
+                    resetUI();
                 }
             } catch (error) {
-                addLogEntry(`上传出错: ${error.message}`, 'error');
-                document.getElementById('progressContainer').style.display = 'none';
+                addLogEntry(`上传出错: ${error.message}`, "error");
+                resetUI();
             }
         };
 
-        // 连接WebSocket
-        connectWebSocket();
+        // 页面加载完成后连接WebSocket
+        window.addEventListener('load', function() {
+            addLogEntry("系统初始化...", "info");
+            connectWebSocket();
+        });
+
+        // 页面关闭前清理资源
+        window.addEventListener('beforeunload', function() {
+            if (ws) {
+                ws.close();
+            }
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+        });
     </script>
 </body>
 </html> 
