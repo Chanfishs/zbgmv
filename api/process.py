@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 from fastapi import FastAPI, File, UploadFile, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from redis import Redis
 import pandas as pd
 import numpy as np
@@ -25,6 +26,9 @@ UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 
 # 创建 FastAPI 应用
 app = FastAPI()
+
+# 添加静态文件服务
+app.mount("/static", StaticFiles(directory="api/static"), name="static")
 
 # 添加 CORS 中间件
 app.add_middleware(
