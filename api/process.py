@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 尝试导入 psutil，如果不可用则跳过
-    try:
+try:
     import psutil
     HAS_PSUTIL = True
 except ImportError:
