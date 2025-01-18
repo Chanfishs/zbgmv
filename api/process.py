@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 import io
 import base64
+import asyncio
 
 # 配置日志
 logging.basicConfig(
@@ -77,13 +78,18 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 class WebSocketLogHandler(logging.Handler):
-    async def emit(self, record):
+    def emit(self, record):
         try:
             log_entry = {
                 "level": record.levelname.lower(),
                 "message": self.format(record)
             }
-            await manager.broadcast(json.dumps(log_entry))
+            # 使用同步方式发送日志
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(manager.broadcast(json.dumps(log_entry)))
+            else:
+                loop.run_until_complete(manager.broadcast(json.dumps(log_entry)))
         except Exception as e:
             print(f"WebSocket 日志发送失败: {str(e)}")
 
@@ -403,3 +409,26 @@ async def process_data_in_background(task_id: str, order_data: bytes, schedule_d
             })
         except:
             pass
+
+# 配置内存日志处理器
+class MemoryLogHandler(logging.Handler):
+    def emit(self, record):
+        global log_id_counter
+        try:
+            log_id_counter += 1
+            log_entry = {
+                "id": log_id_counter,
+                "level": record.levelname.lower(),
+                "message": self.format(record),
+                "timestamp": time.time()
+            }
+            log_buffer.append(log_entry)
+            # 保持最多1000条日志
+            if len(log_buffer) > 1000:
+                log_buffer.pop(0)
+        except Exception as e:
+            print(f"内存日志处理失败: {str(e)}")
+
+# 添加内存日志处理器
+memory_handler = MemoryLogHandler()
+logger.addHandler(memory_handler)
