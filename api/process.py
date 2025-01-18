@@ -5,6 +5,7 @@ import json
 import logging
 import traceback
 from typing import Optional, Dict, Any, List
+from datetime import datetime  # 直接导入 datetime 类
 from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Request, WebSocket, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,6 @@ import io
 import base64
 import asyncio
 import tempfile
-import datetime
 import gc
 
 # 配置日志
@@ -258,7 +258,7 @@ async def process_files(
                 'status': 'processing',
                 'progress': 0,
                 'message': '开始处理...',
-                'start_time': datetime.datetime.now().isoformat()
+                'start_time': datetime.now().isoformat()  # 使用导入的 datetime 类
             })
             
             # 8. 启动后台处理
@@ -384,7 +384,7 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'status': 'processing',
             'progress': 0,
             'message': '开始处理文件...',
-            'start_time': datetime.now().isoformat()
+            'start_time': datetime.now().isoformat()  # 使用导入的 datetime 类
         })
 
         # 1. 首先验证文件格式
@@ -501,7 +501,7 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'status': 'completed',
             'progress': 100,
             'message': '处理完成',
-            'completion_time': datetime.now().isoformat(),
+            'completion_time': datetime.now().isoformat(),  # 使用导入的 datetime 类
             'result': base64.b64encode(result_data).decode('utf-8')
         })
         
@@ -512,7 +512,7 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'status': 'failed',
             'progress': 0,
             'message': f'处理失败: {str(e)}',
-            'failure_time': datetime.now().isoformat()
+            'failure_time': datetime.now().isoformat()  # 使用导入的 datetime 类
         })
         # 清理临时文件
         try:
