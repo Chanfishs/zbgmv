@@ -20,6 +20,7 @@ import asyncio
 import tempfile
 import gc
 import openpyxl
+import re
 
 # 配置日志
 logging.basicConfig(
@@ -423,6 +424,100 @@ async def get_logs(since: int = 0):
             content={"error": f"获取日志失败：{str(e)}"}
         )
 
+def read_excel_with_header_fix(file_path: str, sheet_name: str = None) -> pd.DataFrame:
+    """
+    读取 Excel 文件并自动处理表头问题
+    """
+    try:
+        # 首先尝试读取第一行作为表头
+        df = pd.read_excel(file_path, sheet_name=sheet_name, header=0)
+        
+        # 检查第一行是否与列名重复
+        first_row_values = df.iloc[0].astype(str).tolist()
+        col_names = df.columns.astype(str).tolist()
+        
+        # 计算重复程度
+        same_count = sum(v == c for v, c in zip(first_row_values, col_names))
+        if same_count >= len(col_names) - 1:
+            logger.info("检测到重复的表头行，将自动删除")
+            df.drop(index=df.index[0], inplace=True)
+            df.reset_index(drop=True, inplace=True)
+        
+        return df
+    except Exception as e:
+        logger.error(f"读取 Excel 文件失败: {str(e)}", exc_info=True)
+        raise
+
+def try_parse_datetime(series_or_col: pd.Series, strict_format: str = '%Y-%m-%d %H:%M:%S') -> pd.Series:
+    """
+    多级尝试解析日期时间
+    """
+    try:
+        # 1. 首先尝试严格格式
+        out = pd.to_datetime(series_or_col, format=strict_format, errors='coerce').dt.tz_localize(None)
+        
+        # 2. 检查解析失败率
+        na_ratio = out.isna().mean()
+        if na_ratio > 0.5:
+            logger.warning(f"严格格式解析失败率较高({na_ratio:.0%})，尝试自动解析...")
+            # 自动识别格式
+            out = pd.to_datetime(series_or_col, errors='coerce').dt.tz_localize(None)
+            
+        return out
+    except Exception as e:
+        logger.warning(f"严格格式解析失败: {str(e)}，尝试自动解析...")
+        return pd.to_datetime(series_or_col, errors='coerce').dt.tz_localize(None)
+
+def parse_datetime_from_cols(df: pd.DataFrame, 
+                           date_col: str = '订单提交日期',
+                           time_col: str = '订单提交时间',
+                           new_col: str = '提交时间') -> pd.DataFrame:
+    """
+    智能解析日期时间列
+    """
+    try:
+        # 1. 数据预处理
+        df[date_col] = df[date_col].astype(str).str.strip()
+        df[time_col] = df[time_col].astype(str).str.strip()
+        
+        # 2. 检查时间列是否包含完整日期时间
+        def looks_like_full_datetime(s: str) -> bool:
+            return bool(re.match(r'^\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{1,2}:\d{1,2}$', s))
+        
+        sample_times = df[time_col].dropna().astype(str).head(50)
+        full_dt_count = sum(looks_like_full_datetime(x) for x in sample_times)
+        
+        # 3. 根据情况选择解析策略
+        if full_dt_count > len(sample_times) * 0.7:
+            logger.info(f"检测到 {time_col} 列包含完整日期时间，直接解析该列")
+            df[new_col] = try_parse_datetime(df[time_col])
+        else:
+            logger.info(f"合并 {date_col} 和 {time_col} 列进行解析")
+            dt_str_col = df[date_col] + ' ' + df[time_col]
+            df[new_col] = try_parse_datetime(dt_str_col)
+        
+        # 4. 处理无效记录
+        na_count = df[new_col].isna().sum()
+        if na_count > 0:
+            invalid_examples = df[df[new_col].isna()][[date_col, time_col]].head()
+            logger.warning(
+                f"发现 {na_count} 行无效日期时间记录，示例:\n"
+                f"{invalid_examples.to_string()}\n"
+                f"总行数: {len(df)}, 有效行数: {len(df) - na_count}"
+            )
+            df = df.dropna(subset=[new_col]).copy()
+        
+        # 5. 验证时间范围
+        if not df.empty:
+            min_time = df[new_col].min()
+            max_time = df[new_col].max()
+            logger.info(f"解析后的时间范围: {min_time} 至 {max_time}")
+        
+        return df
+    except Exception as e:
+        logger.error(f"解析日期时间失败: {str(e)}", exc_info=True)
+        return pd.DataFrame()
+
 async def process_data_in_background(task_id: str, order_file_path: str, schedule_file_path: str):
     """后台处理数据的函数"""
     try:
@@ -434,15 +529,15 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'start_time': datetime.now().isoformat()
         })
 
-        # 1. 首先验证文件格式
+        # 1. 读取并验证文件
         await set_task_status(task_id, {
             'status': 'processing',
             'progress': 5,
-            'message': '验证文件格式...'
+            'message': '读取文件...'
         })
         
-        # 读取订单文件头部进行验证
-        order_df = pd.read_excel(order_file_path, nrows=1)
+        # 读取订单文件
+        order_df = read_excel_with_header_fix(order_file_path)
         required_order_columns = ['主订单编号', '子订单编号', '商品ID', '选购商品', 
                                 '流量来源', '流量体裁', '取消原因', '订单状态', 
                                 '订单应付金额', '订单提交日期', '订单提交时间']
@@ -450,95 +545,84 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
         if not all(col in order_df.columns for col in required_order_columns):
             raise ValueError('订单文件缺少必需的列')
             
-        # 读取排班表头部进行验证    
-        schedule_df = pd.read_excel(schedule_file_path, nrows=1)
+        # 读取排班表
+        schedule_df = read_excel_with_header_fix(schedule_file_path)
         required_schedule_columns = ['日期', '上播时间', '下播时间', 
                                    '主播姓名', '场控姓名', '时段消耗']
         
         if not all(col in schedule_df.columns for col in required_schedule_columns):
             raise ValueError('排班表缺少必需的列')
 
-        # 2. 读取排班数据(排班数据通常较小,一次性读取)
-        await set_task_status(task_id, {
-            'status': 'processing',
-            'progress': 10,
-            'message': '读取排班数据...'
-        })
-        
-        schedule_df = pd.read_excel(schedule_file_path)
-        
-        # 3. 分块读取和处理订单数据
+        # 2. 处理排班数据
         await set_task_status(task_id, {
             'status': 'processing',
             'progress': 20,
-            'message': '开始处理订单数据...'
+            'message': '处理排班数据...'
         })
         
-        # 使用 openpyxl 分块读取订单文件
-        wb = openpyxl.load_workbook(filename=order_file_path, read_only=True)
-        ws = wb.active
+        # 解析上播时间
+        schedule_df = parse_datetime_from_cols(
+            schedule_df,
+            date_col='日期',
+            time_col='上播时间',
+            new_col='上播时间'
+        )
         
-        # 获取总行数(减去表头)
-        total_rows = ws.max_row - 1
+        # 解析下播时间
+        schedule_df = parse_datetime_from_cols(
+            schedule_df,
+            date_col='日期',
+            time_col='下播时间',
+            new_col='下播时间'
+        )
         
-        # 只读取一次表头
-        headers = [cell.value for cell in next(ws.rows)]
+        # 处理跨天直播
+        cross_day = schedule_df['下播时间'] < schedule_df['上播时间']
+        if cross_day.any():
+            schedule_df.loc[cross_day, '下播时间'] += pd.Timedelta(days=1)
+            logger.info(f"发现 {cross_day.sum()} 条跨天直播记录")
+        
+        # 3. 分块处理订单数据
+        await set_task_status(task_id, {
+            'status': 'processing',
+            'progress': 40,
+            'message': '处理订单数据...'
+        })
         
         chunk_size = 1000
-        rows_buffer = []
         processed_chunks = []
-        current_row = 0
+        total_chunks = len(order_df) // chunk_size + 1
         
-        # 直接开始读取数据行
-        for row in ws.rows:
-            current_row += 1
+        for chunk_idx in range(total_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, len(order_df))
             
-            # 获取行数据
-            row_data = [cell.value for cell in row]
+            chunk_df = order_df.iloc[start_idx:end_idx].copy()
             
-            # 验证行数据的有效性
-            if not is_valid_row(row_data, headers):
-                logger.warning(f"跳过无效行: {row_data}")
-                continue
-                
-            rows_buffer.append(row_data)
+            # 解析订单时间
+            chunk_df = parse_datetime_from_cols(
+                chunk_df,
+                date_col='订单提交日期',
+                time_col='订单提交时间',
+                new_col='提交时间'
+            )
             
-            # 当收集到一定数量的行时处理
-            if len(rows_buffer) >= chunk_size:
-                # 转换为 DataFrame 并处理
-                chunk_df = pd.DataFrame(rows_buffer, columns=headers)
-                
-                # 清理和转换日期
-                chunk_df = clean_and_parse_dates(chunk_df)
-                
-                # 处理有效数据
-                processed_chunk = process_chunk(chunk_df, schedule_df)
-                if not processed_chunk.empty:
-                    processed_chunks.append(processed_chunk)
-                
-                # 更新进度
-                progress = 20 + int(current_row * 60 / total_rows)
-                await set_task_status(task_id, {
-                    'status': 'processing',
-                    'progress': progress,
-                    'message': f'已处理 {current_row}/{total_rows} 条订单...'
-                })
-                
-                # 清理内存
-                rows_buffer = []
-                gc.collect()
-                await asyncio.sleep(0.1)
-        
-        # 处理剩余的数据
-        if rows_buffer:
-            chunk_df = pd.DataFrame(rows_buffer, columns=headers)
-            chunk_df = clean_and_parse_dates(chunk_df)
+            # 处理订单数据
             processed_chunk = process_chunk(chunk_df, schedule_df)
             if not processed_chunk.empty:
                 processed_chunks.append(processed_chunk)
-        
-        # 关闭工作簿
-        wb.close()
+            
+            # 更新进度
+            progress = 40 + int(chunk_idx * 40 / total_chunks)
+            await set_task_status(task_id, {
+                'status': 'processing',
+                'progress': progress,
+                'message': f'已处理 {chunk_idx + 1}/{total_chunks} 个数据块...'
+            })
+            
+            # 清理内存
+            gc.collect()
+            await asyncio.sleep(0.1)
         
         # 4. 合并结果
         await set_task_status(task_id, {
@@ -556,18 +640,15 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
             'message': '生成结果文件...'
         })
         
-        # 创建临时文件保存结果
         with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
             final_df.to_excel(tmp_file.name, index=False)
             
-            # 读取生成的文件
             with open(tmp_file.name, 'rb') as f:
                 result_data = f.read()
-                
-            # 删除临时文件
+            
             os.unlink(tmp_file.name)
         
-        # 6. 更新任务状态为完成
+        # 6. 完成处理
         await set_task_status(task_id, {
             'status': 'completed',
             'progress': 100,
@@ -578,132 +659,39 @@ async def process_data_in_background(task_id: str, order_file_path: str, schedul
         
     except Exception as e:
         logger.error(f"处理失败: {str(e)}", exc_info=True)
-        # 更新任务状态为失败
         await set_task_status(task_id, {
             'status': 'failed',
             'progress': 0,
             'message': f'处理失败: {str(e)}',
             'failure_time': datetime.now().isoformat()
         })
-        # 清理临时文件
         try:
             os.unlink(order_file_path)
             os.unlink(schedule_file_path)
         except:
             pass
 
-def is_valid_row(row_data: List, headers: List[str]) -> bool:
-    """验证行数据的有效性"""
-    try:
-        # 检查数据列数是否匹配
-        if len(row_data) != len(headers):
-            return False
-            
-        # 检查是否为空行
-        if all(cell is None or str(cell).strip() == '' for cell in row_data):
-            return False
-            
-        # 检查关键字段
-        order_id_idx = headers.index('主订单编号')
-        date_idx = headers.index('订单提交日期')
-        time_idx = headers.index('订单提交时间')
-        
-        # 主订单编号不能为空
-        if not row_data[order_id_idx]:
-            return False
-            
-        # 日期和时间必须存在
-        if not row_data[date_idx] or not row_data[time_idx]:
-            return False
-            
-        return True
-    except Exception as e:
-        logger.error(f"行数据验证失败: {str(e)}")
-        return False
-
-def clean_and_parse_dates(df: pd.DataFrame) -> pd.DataFrame:
-    """清理和解析日期时间"""
-    try:
-        # 确保日期和时间列存在
-        if '订单提交日期' not in df.columns or '订单提交时间' not in df.columns:
-            raise ValueError("缺少日期或时间列")
-            
-        # 1. 数据预处理
-        # 转换为字符串并清理
-        df['订单提交日期'] = df['订单提交日期'].astype(str).str.strip()
-        df['订单提交时间'] = df['订单提交时间'].astype(str).str.strip()
-        
-        # 2. 检查日期格式
-        # 打印不同的日期格式样本
-        unique_dates = df['订单提交日期'].unique()
-        logger.info(f"日期列中的不同格式样本:\n{unique_dates[:5]}")
-        
-        # 打印不同的时间格式样本
-        unique_times = df['订单提交时间'].unique()
-        logger.info(f"时间列中的不同格式样本:\n{unique_times[:5]}")
-        
-        # 3. 尝试解析日期和时间
-        try:
-            # 首先尝试严格的格式解析
-            df['订单提交时间'] = pd.to_datetime(
-                df['订单提交日期'] + ' ' + df['订单提交时间'],
-                format='%Y-%m-%d %H:%M:%S',
-                errors='coerce'
-            ).dt.tz_localize(None)
-        except Exception as e:
-            logger.warning(f"严格格式解析失败: {str(e)}，尝试自动识别格式...")
-            # 如果严格解析失败，尝试自动识别格式
-            df['订单提交时间'] = pd.to_datetime(
-                df['订单提交日期'] + ' ' + df['订单提交时间'],
-                errors='coerce'
-            ).dt.tz_localize(None)
-        
-        # 4. 检查解析结果
-        invalid_dates = df['订单提交时间'].isna()
-        if invalid_dates.any():
-            invalid_examples = df[invalid_dates][['订单提交日期', '订单提交时间']].head()
-            logger.warning(
-                f"发现 {invalid_dates.sum()} 条无效日期记录，示例:\n"
-                f"{invalid_examples.to_string()}\n"
-                f"总行数: {len(df)}, 有效行数: {len(df) - invalid_dates.sum()}"
-            )
-            
-        # 5. 删除无效记录
-        df = df.dropna(subset=['订单提交时间'])
-        
-        # 6. 验证解析后的时间范围
-        if not df.empty:
-            min_time = df['订单提交时间'].min()
-            max_time = df['订单提交时间'].max()
-            logger.info(f"解析后的时间范围: {min_time} 至 {max_time}")
-        
-        return df
-    except Exception as e:
-        logger.error(f"日期解析失败: {str(e)}", exc_info=True)
-        return pd.DataFrame()
-
 def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataFrame:
-    """处理单个数据块的函数"""
+    """处理单个数据块"""
     try:
         if chunk_df.empty:
             return pd.DataFrame()
         
-        # 1. 数据清洗和时间转换
-        chunk_df = clean_and_parse_dates(chunk_df)
-        if chunk_df.empty:
-            logger.warning("清理后数据为空")
-            return pd.DataFrame()
-        
-        # 2. 匹配订单与排班
+        # 匹配订单与排班
         results = []
         total_orders = len(chunk_df)
         matched_orders = 0
         
         for _, order in chunk_df.iterrows():
             # 查找对应的排班记录
-            matched_schedule = find_matching_schedule(order, schedule_df.copy())
-            if matched_schedule is not None:
+            matched = schedule_df[
+                (schedule_df['上播时间'] <= order['提交时间']) & 
+                (schedule_df['下播时间'] >= order['提交时间'])
+            ]
+            
+            if not matched.empty:
                 matched_orders += 1
+                schedule = matched.iloc[0]
                 result_row = {
                     '订单编号': order['主订单编号'],
                     '子订单编号': order['子订单编号'],
@@ -711,15 +699,24 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
                     '商品名称': order['选购商品'],
                     '订单金额': order['订单应付金额'],
                     '订单状态': order['订单状态'],
-                    '提交时间': order['订单提交时间'].strftime('%Y-%m-%d %H:%M:%S'),
-                    '主播': matched_schedule['主播姓名'],
-                    '场控': matched_schedule['场控姓名'],
-                    '直播时段': f"{matched_schedule['上播时间'].strftime('%Y-%m-%d %H:%M:%S')} - {matched_schedule['下播时间'].strftime('%Y-%m-%d %H:%M:%S')}",
-                    '时段消耗': matched_schedule['时段消耗']
+                    '提交时间': order['提交时间'].strftime('%Y-%m-%d %H:%M:%S'),
+                    '主播': schedule['主播姓名'],
+                    '场控': schedule['场控姓名'],
+                    '直播时段': f"{schedule['上播时间'].strftime('%Y-%m-%d %H:%M:%S')} - {schedule['下播时间'].strftime('%Y-%m-%d %H:%M:%S')}",
+                    '时段消耗': schedule['时段消耗']
                 }
                 results.append(result_row)
+            else:
+                # 记录未匹配订单的信息
+                logger.warning(
+                    f"订单时间 {order['提交时间']} 未找到匹配的排班记录\n"
+                    f"订单信息: {order.to_string()}\n"
+                    f"最近的排班记录:\n"
+                    f"上一个时段: {schedule_df[schedule_df['下播时间'] < order['提交时间']].iloc[-1:].to_string() if not schedule_df[schedule_df['下播时间'] < order['提交时间']].empty else '无'}\n"
+                    f"下一个时段: {schedule_df[schedule_df['上播时间'] > order['提交时间']].iloc[:1].to_string() if not schedule_df[schedule_df['上播时间'] > order['提交时间']].empty else '无'}"
+                )
         
-        # 3. 记录匹配率
+        # 记录匹配率
         match_rate = matched_orders / total_orders if total_orders > 0 else 0
         logger.info(f"订单匹配率: {match_rate:.2%} ({matched_orders}/{total_orders})")
         
@@ -728,86 +725,6 @@ def process_chunk(chunk_df: pd.DataFrame, schedule_df: pd.DataFrame) -> pd.DataF
     except Exception as e:
         logger.error(f"处理数据块时出错: {str(e)}", exc_info=True)
         return pd.DataFrame()
-
-def find_matching_schedule(order: pd.Series, schedule_df: pd.DataFrame) -> Optional[pd.Series]:
-    """查找订单对应的排班记录"""
-    try:
-        # 1. 确保订单时间是 tz-naive
-        order_time = pd.to_datetime(order['订单提交时间']).tz_localize(None)
-        
-        # 2. 转换排班表的时间
-        try:
-            # 首先尝试严格格式
-            schedule_df['上播时间'] = pd.to_datetime(
-                schedule_df['日期'].astype(str) + ' ' + 
-                schedule_df['上播时间'].astype(str),
-                format='%Y-%m-%d %H:%M:%S',
-                errors='coerce'
-            ).dt.tz_localize(None)
-            
-            schedule_df['下播时间'] = pd.to_datetime(
-                schedule_df['日期'].astype(str) + ' ' + 
-                schedule_df['下播时间'].astype(str),
-                format='%Y-%m-%d %H:%M:%S',
-                errors='coerce'
-            ).dt.tz_localize(None)
-        except Exception as e:
-            logger.warning(f"排班表时间严格解析失败: {str(e)}，尝试自动识别格式...")
-            # 如果严格解析失败，尝试自动识别
-            schedule_df['上播时间'] = pd.to_datetime(
-                schedule_df['日期'].astype(str) + ' ' + 
-                schedule_df['上播时间'].astype(str),
-                errors='coerce'
-            ).dt.tz_localize(None)
-            
-            schedule_df['下播时间'] = pd.to_datetime(
-                schedule_df['日期'].astype(str) + ' ' + 
-                schedule_df['下播时间'].astype(str),
-                errors='coerce'
-            ).dt.tz_localize(None)
-        
-        # 3. 检查并记录无效时间
-        invalid_times = schedule_df[['上播时间', '下播时间']].isna().any(axis=1)
-        if invalid_times.any():
-            invalid_examples = schedule_df[invalid_times][['日期', '上播时间', '下播时间']].head()
-            logger.warning(
-                f"排班表中发现 {invalid_times.sum()} 条无效时间记录，示例:\n"
-                f"{invalid_examples.to_string()}\n"
-                f"总行数: {len(schedule_df)}, 有效行数: {len(schedule_df) - invalid_times.sum()}"
-            )
-        
-        # 4. 删除无效记录
-        schedule_df = schedule_df.dropna(subset=['上播时间', '下播时间'])
-        
-        # 5. 处理跨天直播的情况
-        # 如果下播时间小于上播时间，说明跨天了，需要加一天
-        cross_day = schedule_df['下播时间'] < schedule_df['上播时间']
-        if cross_day.any():
-            schedule_df.loc[cross_day, '下播时间'] += pd.Timedelta(days=1)
-            logger.info(f"发现 {cross_day.sum()} 条跨天直播记录")
-        
-        # 6. 查找匹配记录
-        matched = schedule_df[
-            (schedule_df['上播时间'] <= order_time) & 
-            (schedule_df['下播时间'] >= order_time)
-        ]
-        
-        if not matched.empty:
-            return matched.iloc[0]
-        
-        # 7. 如果没有匹配记录,记录详细日志
-        logger.warning(
-            f"订单时间 {order_time} 未找到匹配的排班记录\n"
-            f"订单信息: {order.to_string()}\n"
-            f"最近的排班记录:\n"
-            f"上一个时段: {schedule_df[schedule_df['下播时间'] < order_time].iloc[-1:].to_string() if not schedule_df[schedule_df['下播时间'] < order_time].empty else '无'}\n"
-            f"下一个时段: {schedule_df[schedule_df['上播时间'] > order_time].iloc[:1].to_string() if not schedule_df[schedule_df['上播时间'] > order_time].empty else '无'}"
-        )
-        return None
-        
-    except Exception as e:
-        logger.error(f"匹配排班记录时出错: {str(e)}", exc_info=True)
-        return None
 
 # 配置内存日志处理器
 class MemoryLogHandler(logging.Handler):
