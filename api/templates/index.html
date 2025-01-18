@@ -309,37 +309,12 @@
             }
         });
 
-        // 轮询获取日志
-        let lastLogId = 0;
-        let isPolling = false;
-
-        async function pollLogs() {
-            if (isPolling) return;
-            
-            try {
-                isPolling = true;
-                const response = await fetch(`${getApiBaseUrl()}/api/logs?since=${lastLogId}`);
-                if (!response.ok) {
-                    throw new Error(`获取日志失败: ${response.status}`);
-                }
-                
-                const logs = await response.json();
-                if (logs && logs.length > 0) {
-                    logs.forEach(log => {
-                        appendLog(log);
-                        lastLogId = Math.max(lastLogId, log.id);
-                    });
-                }
-            } catch (error) {
-                console.error('获取日志错误:', error);
-                appendLog({
-                    level: 'error',
-                    message: `获取日志失败: ${error.message}`
-                });
-            } finally {
-                isPolling = false;
-            }
-        }
+        // 轮询相关配置
+        const POLL_INTERVAL = 5000; // 5秒轮询一次
+        const MAX_RETRIES = 3;     // 最大重试次数
+        const RETRY_DELAY = 1000;  // 重试延迟1秒
+        let retryCount = 0;        // 当前重试次数
+        let pollTimeout = null;    // 轮询超时计时器
 
         // 检查处理进度
         async function checkProgress() {
@@ -352,6 +327,7 @@
                 }
                 
                 const data = await response.json();
+                retryCount = 0; // 成功后重置重试计数
                 
                 // 更新进度条
                 const progressBar = document.getElementById('progressBar');
@@ -365,6 +341,7 @@
                 // 处理完成
                 if (data.status === 'completed') {
                     clearInterval(progressCheckInterval);
+                    clearTimeout(pollTimeout);
                     document.getElementById('submitBtn').disabled = false;
                     
                     // 显示下载链接
@@ -391,45 +368,40 @@
                     
                     // 停止轮询
                     clearInterval(pollInterval);
+                    return;
                 }
                 
                 // 处理失败
                 if (data.status === 'failed') {
                     clearInterval(progressCheckInterval);
+                    clearTimeout(pollTimeout);
                     document.getElementById('submitBtn').disabled = false;
                     statusMessage.textContent = `处理失败: ${data.message}`;
                     statusMessage.classList.add('error-message');
                     
                     // 停止轮询
                     clearInterval(pollInterval);
+                    return;
                 }
                 
             } catch (error) {
                 console.error('检查进度错误:', error);
-                clearInterval(progressCheckInterval);
-                document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
-                document.getElementById('submitBtn').disabled = false;
+                retryCount++;
                 
-                // 停止轮询
-                clearInterval(pollInterval);
-            }
-        }
-
-        // 开始轮询
-        let pollInterval = null;
-        function startPolling() {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-            }
-            // 每3秒轮询一次
-            pollInterval = setInterval(pollLogs, 3000);
-            
-            // 添加页面卸载时的清理
-            window.addEventListener('beforeunload', () => {
-                if (pollInterval) {
+                if (retryCount >= MAX_RETRIES) {
+                    clearInterval(progressCheckInterval);
+                    clearTimeout(pollTimeout);
+                    document.getElementById('statusMessage').textContent = `错误: ${error.message}`;
+                    document.getElementById('submitBtn').disabled = false;
+                    
+                    // 停止轮询
                     clearInterval(pollInterval);
+                    return;
                 }
-            });
+                
+                // 延迟重试
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            }
         }
 
         // 开始定期检查进度
@@ -437,8 +409,20 @@
             if (progressCheckInterval) {
                 clearInterval(progressCheckInterval);
             }
-            // 每3秒检查一次进度
-            progressCheckInterval = setInterval(checkProgress, 3000);
+            if (pollTimeout) {
+                clearTimeout(pollTimeout);
+            }
+            
+            // 设置30分钟超时
+            pollTimeout = setTimeout(() => {
+                clearInterval(progressCheckInterval);
+                document.getElementById('statusMessage').textContent = '处理超时,请重试';
+                document.getElementById('submitBtn').disabled = false;
+                clearInterval(pollInterval);
+            }, 30 * 60 * 1000);
+            
+            // 每5秒检查一次进度
+            progressCheckInterval = setInterval(checkProgress, POLL_INTERVAL);
         }
 
         // 拖放功能
